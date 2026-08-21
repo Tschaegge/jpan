@@ -17,6 +17,7 @@ package org.scion.jpan.testutil;
 public class HummingbirdExamplePacket {
 
   // TODO provenance javadoc
+  // This is just the path header
 
   public static final byte[] PATH_RAW_HBIRD_112_111 = {
     0, 2, -124, 0, 106, 127, 8, -25, 18, 0, 0, 4, 0, 0, -69, -2,
@@ -29,6 +30,7 @@ public class HummingbirdExamplePacket {
   };
 
   // TODO provenance javadoc
+  //this is the whole packet
 
   public static final byte[] PACKET_BYTES_HBIRD_112_111 = {
     0, 0, 0, 1, 17, 34, 5, 8, 5, 0, 0, 0, 0, 1, -1, 0,
