@@ -30,7 +30,7 @@ public class HummingbirdExamplePacket {
   };
 
   // TODO provenance javadoc
-  //this is the whole packet
+  // this is the whole packet
 
   public static final byte[] PACKET_BYTES_HBIRD_112_111 = {
     0, 0, 0, 1, 17, 34, 5, 8, 5, 0, 0, 0, 0, 1, -1, 0,
