@@ -50,7 +50,7 @@ public class HummingbirdPathRaw {
    * allows up to 381 lines, hence up to 127 hop fields, so a malformed header can exceed this; the
    * walk rejects that explicitly instead of overrunning the array.
    */
-  private static final int MAX_HOP_FIELDS = 64;
+  static final int MAX_HOP_FIELDS = 64;
 
   // path meta header
   private int currINF; // 2 bits
