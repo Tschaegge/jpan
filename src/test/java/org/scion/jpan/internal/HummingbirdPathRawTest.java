@@ -60,7 +60,6 @@ class HummingbirdPathRawTest {
     assertEquals(1786710201L, path.getInfoField(1).getTimestamp());
   }
 
-  
   @Test
   void testHopFieldCountAndStride() {
     HummingbirdPathRaw path = HummingbirdPathRaw.create(pathBytes);
@@ -101,7 +100,6 @@ class HummingbirdPathRawTest {
     assertEquals(0, path.getHopField(3).getEgress());
   }
 
-
   @Test
   void testSegmentBoundaryCarriesNoFlyover() {
     HummingbirdPathRaw path = HummingbirdPathRaw.create(pathBytes);
@@ -126,7 +124,6 @@ class HummingbirdPathRawTest {
     assertEquals(0, path.getHopFieldCount());
     assertEquals(0, path.getSegmentCount());
   }
-
 
   @Test
   void testSegLenMismatchIsRejected() {
