@@ -1,3 +1,17 @@
+// Copyright 2026 ETH Zurich
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package org.scion.jpan.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,9 +29,19 @@ public class HummingbirdConverterTest {
   @Test
   void testConvertUpCoreDown() {
     byte[] out = HummingbirdPathConverter.convertFromScion(scionPathUCD, 1786710247L, 72, 4);
-    assertEquals(120, out.length);
+    HummingbirdPathRaw h = HummingbirdPathRaw.create(out);
+    assertEquals(120, h.length());
+    assertEquals(6, h.getSegLen(0));
+    assertEquals(9, h.getSegLen(1));
+    assertEquals(6, h.getSegLen(2));
+    assertEquals(3, h.getSegmentCount());
+    assertEquals(7, h.getHopFieldCount());
+    assertEquals(1786710247L, h.getBaseTimestamp());
+    assertEquals(72, h.getMillis());
+    assertEquals(4, h.getCounter());
   }
 
+  @Test
   void testConvertTiny() {
     byte[] out = HummingbirdPathConverter.convertFromScion(scionPathtiny, 1786710247L, 72, 4);
     HummingbirdPathRaw h = HummingbirdPathRaw.create(out);
