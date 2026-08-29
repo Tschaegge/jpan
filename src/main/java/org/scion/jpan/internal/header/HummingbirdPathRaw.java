@@ -19,6 +19,7 @@ import static org.scion.jpan.internal.util.ByteUtil.readInt;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.stream.IntStream;
 import org.scion.jpan.internal.header.PathRawParser.HopField;
 import org.scion.jpan.internal.header.PathRawParser.InfoField;
 
@@ -63,6 +64,7 @@ public class HummingbirdPathRaw {
   private final InfoField[] info = new InfoField[3];
   private final FlyoverHopField[] hops = new FlyoverHopField[MAX_HOP_FIELDS];
   private int numHops;
+  private final int[] hopSegment = new int[MAX_HOP_FIELDS];
   private int len;
 
   public static HummingbirdPathRaw create(byte[] rawPath) {
@@ -105,6 +107,8 @@ public class HummingbirdPathRaw {
       if (numHops == MAX_HOP_FIELDS) {
         throw new IllegalArgumentException("Too many hop fields, maximum is " + MAX_HOP_FIELDS);
       }
+      // returns which segment the connection is part of, up(0),core(1) or down(2)
+      hopSegment[numHops] = segmentOfLine(lines);
       hops[numHops].read(data);
       lines += hops[numHops].length() / LINE_LEN;
       numHops++;
@@ -116,6 +120,13 @@ public class HummingbirdPathRaw {
     }
 
     len = data.position() - start;
+  }
+
+  private int segmentOfLine(int line) {
+    if (line < segLen[0]){
+       return 0;
+    }
+    return (line < segLen[0] + segLen[1]) ? 1 : 2;
   }
 
   /** Number of bytes consumed by this path. */
@@ -145,8 +156,44 @@ public class HummingbirdPathRaw {
     return n;
   }
 
+  public int getSegmentHopCount(int seg) {
+    if (seg < 0 || seg > 2){
+      throw new IllegalArgumentException("segment needs to be between 0 and 2");
+    }
+    return (int)
+        Arrays.stream(hopSegment, 0, numHops)
+            .filter(i -> i == seg)
+            .count(); // returns the number of hops in the seg
+  }
+
+  public int getFirstHopOfSegment(int seg) {
+    if (seg < 0 || seg > 2){
+      throw new IllegalArgumentException("segment needs to be between 0 and 2");
+    }
+    return IntStream.range(0, numHops).filter(i -> hopSegment[i] == seg).findFirst().orElse(-1);
+  }
+
   public InfoField getInfoField(int i) {
     return info[i];
+  }
+
+  /**
+   * Index of the info field that applies to hop field {@code hopIdx}, i.e. which segment the hop
+   * field belongs to. A hop field belongs to the segment its starting line falls in; the hop index
+   * alone is not enough, because hop fields are either 3 or 5 lines wide.
+   *
+   * <p>The bounds check matters: {@code hopSegment} is sized for the maximum number of hop fields,
+   * so without it an index past the end would silently return 0, which is indistinguishable from a
+   * genuine answer.
+   *
+   * @throws IllegalArgumentException if there is no such hop field
+   */
+  public int getInfoFieldIndex(int hopIdx) {
+    if (hopIdx < 0 || hopIdx >= numHops) {
+      throw new IllegalArgumentException(
+          "No hop field " + hopIdx + ", path has " + numHops + " hop field(s)");
+    }
+    return hopSegment[hopIdx];
   }
 
   public int getHopFieldCount() {

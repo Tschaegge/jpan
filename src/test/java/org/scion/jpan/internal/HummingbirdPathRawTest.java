@@ -133,4 +133,22 @@ class HummingbirdPathRawTest {
         assertThrows(IllegalArgumentException.class, () -> HummingbirdPathRaw.create(bad));
     assertTrue(e.getMessage().contains("18 lines"), e.getMessage());
   }
+
+  @Test
+  void testSegmentMembership() {
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(pathBytes);
+
+    assertEquals(0, path.getInfoFieldIndex(0));
+    assertEquals(0, path.getInfoFieldIndex(1));
+    assertEquals(1, path.getInfoFieldIndex(2));
+    assertEquals(1, path.getInfoFieldIndex(3));
+
+    assertEquals(2, path.getSegmentHopCount(0));
+    assertEquals(2, path.getSegmentHopCount(1));
+    assertEquals(0, path.getSegmentHopCount(2));
+
+    assertEquals(0, path.getFirstHopOfSegment(0));
+    assertEquals(2, path.getFirstHopOfSegment(1));
+    assertEquals(-1, path.getFirstHopOfSegment(2), "an empty segment has no first hop");
+  }
 }

@@ -39,6 +39,17 @@ public class HummingbirdConverterTest {
     assertEquals(1786710247L, h.getBaseTimestamp());
     assertEquals(72, h.getMillis());
     assertEquals(4, h.getCounter());
+    int[] expected = {0, 0, 1, 1, 1, 2, 2};
+    for (int i = 0; i < expected.length; i++) {
+      assertEquals(expected[i], h.getInfoFieldIndex(i), "hop " + i);
+    }
+    assertEquals(2, h.getSegmentHopCount(0));
+    assertEquals(3, h.getSegmentHopCount(1));
+    assertEquals(2, h.getSegmentHopCount(2));
+    assertEquals(0, h.getFirstHopOfSegment(0));
+    assertEquals(2, h.getFirstHopOfSegment(1));
+    assertEquals(5, h.getFirstHopOfSegment(2));
+
   }
 
   @Test
@@ -54,5 +65,13 @@ public class HummingbirdConverterTest {
     assertEquals(1786710247L, h.getBaseTimestamp());
     assertEquals(72, h.getMillis());
     assertEquals(4, h.getCounter());
+    assertEquals(0, h.getInfoFieldIndex(0));
+    assertEquals(0, h.getInfoFieldIndex(1));
+    assertEquals(2, h.getSegmentHopCount(0));
+    assertEquals(0, h.getSegmentHopCount(1));
+    assertEquals(0, h.getSegmentHopCount(2));
+    assertEquals(0, h.getFirstHopOfSegment(0));
+    assertEquals(-1, h.getFirstHopOfSegment(1));
+    assertEquals(-1, h.getFirstHopOfSegment(2));
   }
 }
