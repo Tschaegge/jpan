@@ -49,7 +49,6 @@ public class HummingbirdConverterTest {
     assertEquals(0, h.getFirstHopOfSegment(0));
     assertEquals(2, h.getFirstHopOfSegment(1));
     assertEquals(5, h.getFirstHopOfSegment(2));
-
   }
 
   @Test

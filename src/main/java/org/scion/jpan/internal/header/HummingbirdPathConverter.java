@@ -48,4 +48,22 @@ public class HummingbirdPathConverter {
     System.arraycopy(scionPath, 4, out, 12, scionPath.length - 4);
     return out;
   }
+
+  /*
+  This method assures that on segment boundaries only one segment is assigned as flyover field. See A.5
+  */
+  public static int[] flyoverEligibleHopFields(HummingbirdPathRaw path) {
+    int segments = path.getSegmentCount();
+    if (segments == 0) {
+      return new int[0];
+    }
+    int[] eligible = new int[path.getHopFieldCount()];
+    int n = 0;
+    for (int seg = 0; seg < segments; seg++) {
+      int first = path.getFirstHopOfSegment(seg);
+      int hops = path.getSegmentHopCount(seg);
+    }
+
+    return null;
+  }
 }

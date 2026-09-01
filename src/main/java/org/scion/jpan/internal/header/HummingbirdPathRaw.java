@@ -123,8 +123,8 @@ public class HummingbirdPathRaw {
   }
 
   private int segmentOfLine(int line) {
-    if (line < segLen[0]){
-       return 0;
+    if (line < segLen[0]) {
+      return 0;
     }
     return (line < segLen[0] + segLen[1]) ? 1 : 2;
   }
@@ -148,6 +148,7 @@ public class HummingbirdPathRaw {
     return segLen[i];
   }
 
+  /*Returns the number of segments used for the connection */
   public int getSegmentCount() {
     int n = 0;
     for (int i = 0; i < segLen.length && segLen[i] > 0; i++) {
@@ -157,7 +158,7 @@ public class HummingbirdPathRaw {
   }
 
   public int getSegmentHopCount(int seg) {
-    if (seg < 0 || seg > 2){
+    if (seg < 0 || seg > 2) {
       throw new IllegalArgumentException("segment needs to be between 0 and 2");
     }
     return (int)
@@ -167,7 +168,7 @@ public class HummingbirdPathRaw {
   }
 
   public int getFirstHopOfSegment(int seg) {
-    if (seg < 0 || seg > 2){
+    if (seg < 0 || seg > 2) {
       throw new IllegalArgumentException("segment needs to be between 0 and 2");
     }
     return IntStream.range(0, numHops).filter(i -> hopSegment[i] == seg).findFirst().orElse(-1);
