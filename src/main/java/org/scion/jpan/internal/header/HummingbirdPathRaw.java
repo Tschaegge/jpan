@@ -64,7 +64,9 @@ public class HummingbirdPathRaw {
   private final InfoField[] info = new InfoField[3];
   private final FlyoverHopField[] hops = new FlyoverHopField[MAX_HOP_FIELDS];
   private int numHops;
-  private final int[] hopSegment = new int[MAX_HOP_FIELDS];
+  private final int[] hopSegment = new int[MAX_HOP_FIELDS]; // which segment the HF is in
+  private final int[] hopLine = new int[MAX_HOP_FIELDS]; // Which line it starts at
+
   private int len;
 
   public static HummingbirdPathRaw create(byte[] rawPath) {
@@ -109,6 +111,7 @@ public class HummingbirdPathRaw {
       }
       // returns which segment the connection is part of, up(0),core(1) or down(2)
       hopSegment[numHops] = segmentOfLine(lines);
+      hopLine[numHops] = lines;
       hops[numHops].read(data);
       lines += hops[numHops].length() / LINE_LEN;
       numHops++;
@@ -143,6 +146,32 @@ public class HummingbirdPathRaw {
     return currHF;
   }
 
+  /**
+   * Index of the hop field that starts at {@link #getCurrHF()}, or -1 if {@code CurrHF} does not
+   * point at the start of a hop field.
+   *
+   * <p>{@code CurrHF} is an offset in 4-byte lines despite its name, so it is not a hop field
+   * index: a hop field is 3 or 5 lines wide, and the two only coincide on a path without flyovers.
+   * This translates the one into the other, so the result can be passed to {@link
+   * #getHopField(int)}.
+   */
+  public int getCurrentHopIndex() {
+    for (int i = 0; i < numHops; i++) {
+      if (hopLine[i] == currHF) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Whether {@link #getCurrHF()} points at the start of a hop field. False means the header is
+   * malformed: the current-hop pointer lands inside a hop field rather than on its first line.
+   */
+  public boolean isCurrHFAtHopStart() {
+    return getCurrentHopIndex() >= 0;
+  }
+
   /** Length of segment {@code i} in 4-byte lines. */
   public int getSegLen(int i) {
     return segLen[i];
@@ -155,6 +184,21 @@ public class HummingbirdPathRaw {
       n++;
     }
     return n;
+  }
+
+  /*returns if this hop is part of a crossover */
+  public int getCrossOver(int hopIdx) {
+    int segment = getInfoFieldIndex(hopIdx);
+    int first = getFirstHopOfSegment(segment);
+    if (segment != 0 && hopIdx == first) {
+      return 1;
+    }
+    int lastHop = first + getSegmentHopCount(segment) - 1;
+    int lastSegment = getSegmentCount() - 1;
+    if (hopIdx == lastHop && segment != lastSegment) {
+      return -1;
+    }
+    return 0;
   }
 
   public int getSegmentHopCount(int seg) {
@@ -174,7 +218,25 @@ public class HummingbirdPathRaw {
     return IntStream.range(0, numHops).filter(i -> hopSegment[i] == seg).findFirst().orElse(-1);
   }
 
+  /**
+   * Line at which hop field {@code hopIdx} starts, counted from the first hop field. Needed because
+   * hop fields are 3 or 5 lines wide, so the hop index alone does not give the offset.
+   *
+   * @throws IllegalArgumentException if there is no such hop field
+   */
+  public int getHopLine(int hopIdx) {
+    checkHopIndex(hopIdx);
+    return hopLine[hopIdx];
+  }
+
+  /**
+   * @throws IllegalArgumentException if there is no such segment
+   */
   public InfoField getInfoField(int i) {
+    if (i < 0 || i >= getSegmentCount()) {
+      throw new IllegalArgumentException(
+          "No info field " + i + ", path has " + getSegmentCount() + " segment(s)");
+    }
     return info[i];
   }
 
@@ -190,10 +252,7 @@ public class HummingbirdPathRaw {
    * @throws IllegalArgumentException if there is no such hop field
    */
   public int getInfoFieldIndex(int hopIdx) {
-    if (hopIdx < 0 || hopIdx >= numHops) {
-      throw new IllegalArgumentException(
-          "No hop field " + hopIdx + ", path has " + numHops + " hop field(s)");
-    }
+    checkHopIndex(hopIdx);
     return hopSegment[hopIdx];
   }
 
@@ -201,8 +260,24 @@ public class HummingbirdPathRaw {
     return numHops;
   }
 
+  /**
+   * @throws IllegalArgumentException if there is no such hop field
+   */
   public FlyoverHopField getHopField(int i) {
+    checkHopIndex(i);
     return hops[i];
+  }
+
+  /**
+   * The per-hop-field arrays are sized for the maximum number of hop fields, so an index past the
+   * end would silently read an unwritten slot -- a zero that is indistinguishable from a genuine
+   * answer.
+   */
+  private void checkHopIndex(int hopIdx) {
+    if (hopIdx < 0 || hopIdx >= numHops) {
+      throw new IllegalArgumentException(
+          "No hop field " + hopIdx + ", path has " + numHops + " hop field(s)");
+    }
   }
 
   /** Seconds part of the packet timestamp, as unsigned Unix seconds. */
