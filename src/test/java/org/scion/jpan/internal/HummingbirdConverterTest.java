@@ -14,17 +14,19 @@
 
 package org.scion.jpan.internal;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.scion.jpan.internal.header.HummingbirdPathConverter;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.ExamplePacket;
+import org.scion.jpan.testutil.HummingbirdExamplePacket;
 
 public class HummingbirdConverterTest {
 
   private static final byte[] scionPathUCD = ExamplePacket.PATH_RAW_UP_CORE_DOWN;
   private static final byte[] scionPathtiny = ExamplePacket.PATH_RAW_TINY_110_112;
+  private static final byte[] hbirdPath = HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111;
 
   @Test
   void testConvertUpCoreDown() {
@@ -72,5 +74,61 @@ public class HummingbirdConverterTest {
     assertEquals(0, h.getFirstHopOfSegment(0));
     assertEquals(-1, h.getFirstHopOfSegment(1));
     assertEquals(-1, h.getFirstHopOfSegment(2));
+  }
+
+  /**
+   * Strip the three flyovers off the captured packet and write them back: byte for byte the same.
+   */
+  @Test
+  void testRemoveAndInsertFlyoversRoundTrip() {
+    byte[] stripped = HummingbirdPathConverter.removeFlyovers(hbirdPath);
+    assertEquals(76, stripped.length);
+    HummingbirdPathRaw s = HummingbirdPathRaw.create(stripped);
+    assertEquals(6, s.getSegLen(0));
+    assertEquals(6, s.getSegLen(1));
+    for (int i = 0; i < 4; i++) {
+      assertFalse(s.getHopField(i).isFlyover(), "hop " + i);
+    }
+
+    // The capture carries resID 1, bw 1023, offset 2, duration 9 on hop fields 0, 1 and 3.
+    byte[] out = stripped;
+    for (int hop : new int[] {0, 1, 3}) {
+      out = HummingbirdPathConverter.insertFlyover(out, hop, 1, 1023, 2, 9);
+    }
+    assertArrayEquals(hbirdPath, out);
+  }
+
+  /** Inserting twice would grow the hop field a second time, so the second call is rejected. */
+  @Test
+  void testInsertFlyoverOnExistingFlyoverIsRejected() {
+    IllegalArgumentException e =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> HummingbirdPathConverter.insertFlyover(hbirdPath, 0, 1, 1023, 2, 9));
+    assertTrue(e.getMessage().contains("already has a flyover"), e.getMessage());
+  }
+
+  /** Hop field 2 is the first of the down segment; Appendix A.5 forbids a flyover there. */
+  @Test
+  void testInsertFlyoverOnSegmentBoundaryIsRejected() {
+    byte[] stripped = HummingbirdPathConverter.removeFlyovers(hbirdPath);
+    IllegalArgumentException e =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> HummingbirdPathConverter.insertFlyover(stripped, 2, 1, 1023, 2, 9));
+    assertTrue(e.getMessage().contains("A.5"), e.getMessage());
+  }
+
+  @Test
+  void testInsertFlyoverRejectsBadArguments() {
+    byte[] stripped = HummingbirdPathConverter.removeFlyovers(hbirdPath);
+    // bw is a 10-bit field, 1024 does not fit
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.insertFlyover(stripped, 0, 1, 1024, 2, 9));
+    // the path has hop fields 0..3
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.insertFlyover(stripped, 4, 1, 1023, 2, 9));
   }
 }
