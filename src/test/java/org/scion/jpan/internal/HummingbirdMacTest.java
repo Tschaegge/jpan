@@ -22,8 +22,8 @@ import org.scion.jpan.ScionUtil;
 import org.scion.jpan.internal.header.HummingbirdMac;
 
 /**
- * The expected values are pinned vectors computed with implementations independent of both JPAN
- * and the Go reference: OpenSSL for the AES blocks, Python hashlib for PBKDF2.
+ * The expected values are pinned vectors computed with implementations independent of both JPAN and
+ * the Go reference: OpenSSL for the AES blocks, Python hashlib for PBKDF2.
  *
  * <pre>
  *   Ak: echo -n 00020005000102030003000102030000 | xxd -r -p | \

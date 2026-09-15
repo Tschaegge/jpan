@@ -35,15 +35,10 @@ import org.scion.jpan.internal.util.ByteUtil;
  */
 public final class HummingbirdMac {
 
-  /** PBKDF2 salt for deriving the AS secret value, same constant as the reference. */
+  /** Using the same constants as in the reference implementation **/
   public static final String SECRET_VALUE_SALT = "Derive hbird sv";
-
-  /** The secret value, Ak and Vk are one AES-128 block each. */
   public static final int KEY_LEN = 16;
-
-  /** Only the first six bytes of Vk take part in the aggregated hop field MAC. */
   public static final int MAC_LEN = 6;
-
   private static final int PBKDF2_ITERATIONS = 1000;
 
   private HummingbirdMac() {}
@@ -86,7 +81,7 @@ public final class HummingbirdMac {
       throw new IllegalArgumentException("Key must be " + KEY_LEN + " bytes, got " + key.length);
     }
     try {
-      Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding");
+      Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding"); //ECB isn't a problem as we have only one block
       cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
       return cipher;
     } catch (GeneralSecurityException e) {
