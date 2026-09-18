@@ -26,7 +26,7 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class HummingbirdMac {
 
-  /** Same constants as in the reference implementation. */
+  // Same constants as in the reference implementation.
   public static final int KEY_LEN = 16;
   public static final int MAC_LEN = 6;
 
@@ -78,7 +78,7 @@ public final class HummingbirdMac {
     }
   }
 
-  /** XORs the first six bytes of the flyover MAC into the SCION MAC*/
+  /** XORs the first six bytes of the flyover MAC into the SCION MAC */
   public static byte[] aggregateMac(byte[] scionMac, byte[] flyoverMac) {
     byte[] out = new byte[MAC_LEN];
     for (int i = 0; i < MAC_LEN; i++) {
