@@ -20,19 +20,14 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * The per-packet cryptography of a Hummingbird endhost: the flyover MAC Vk (one AES block keyed
+ * The per packet cryptography of a Hummingbird endhost: the flyover MAC Vk (one AES block keyed
  * with the reservation's Ak) and Vk[0:6] XOR SCION MAC as the aggregated MAC carried by a flyover
  * hop field.
- *
- * <p>Mirrors {@code pkg/slayers/path/hummingbird/mac.go} of the reference implementation. Ak
- * arrives with the reservation; deriving it (and the AS secret value it comes from) is the AS's
- * business and lives in the test scope, see {@code testutil.HummingbirdKeys}.
  */
 public final class HummingbirdMac {
 
   /** Same constants as in the reference implementation. */
   public static final int KEY_LEN = 16;
-
   public static final int MAC_LEN = 6;
 
   private HummingbirdMac() {}
@@ -75,30 +70,21 @@ public final class HummingbirdMac {
     bb.putShort((short) pktLen);
     bb.putShort((short) resStartTime);
     bb.putInt(highResTs);
-    return encryptBlock(akCipher, block);
+    try {
+      akCipher.doFinal(block, 0, KEY_LEN, block, 0); // encrypts in place
+      return block;
+    } catch (GeneralSecurityException e) {
+      throw new IllegalStateException(e); // one full block, no padding: cannot happen
+    }
   }
 
-  /**
-   * XORs the first six bytes of the flyover MAC into the SCION MAC: the aggregated MAC a flyover
-   * hop field carries. XOR is an involution, so aggregating the same flyover MAC again restores the
-   * SCION MAC.
-   */
+  /** XORs the first six bytes of the flyover MAC into the SCION MAC*/
   public static byte[] aggregateMac(byte[] scionMac, byte[] flyoverMac) {
     byte[] out = new byte[MAC_LEN];
     for (int i = 0; i < MAC_LEN; i++) {
       out[i] = (byte) (scionMac[i] ^ flyoverMac[i]);
     }
     return out;
-  }
-
-  /** Encrypts the block in place and returns it. */
-  private static byte[] encryptBlock(Cipher cipher, byte[] block) {
-    try {
-      cipher.doFinal(block, 0, KEY_LEN, block, 0);
-      return block;
-    } catch (GeneralSecurityException e) {
-      throw new IllegalStateException(e); // one full block, no padding: cannot happen
-    }
   }
 
   /** A value that does not fit its field would leak into the neighbouring field. Check first. */
