@@ -32,6 +32,7 @@ public class HummingbirdPathRaw {
   public static final int LINE_LEN = 4;
   public static final int HOP_LINES = 3;
   public static final int FLYOVER_LINES = 5;
+  static final int INFO_FIELD_LEN = 8;
   static final int MAX_HOP_FIELDS = 64;
 
   // path meta header
@@ -218,6 +219,51 @@ public class HummingbirdPathRaw {
   public int getHopStartLine(int hopIdx) {
     checkHopIndex(hopIdx);
     return hopStartLine[hopIdx];
+  }
+
+  /**
+   * Returns the byte offset of hop field {@code hopIdx} in the raw path: behind the meta header and
+   * the info fields, then {@code hopStartLine} lines of 4 bytes.
+   */
+  public int getHopFieldOffset(int hopIdx) {
+    return META_LEN + getSegmentCount() * INFO_FIELD_LEN + getHopStartLine(hopIdx) * LINE_LEN;
+  }
+
+  /**
+   * Returns the ingress and egress interface of hop field {@code hopIdx} in traversal direction, as
+   * {@code {ingress, egress}}. These are the interfaces a reservation for this hop field is issued
+   * for and that go into the derivation of Ak; the router determines them the same way ({@code
+   * getFlyoverInterfaces} in the reference).
+   *
+   * <p>Three rules. The hop field stores the interfaces in construction direction; if its segment
+   * was not constructed in the direction of travel, the two are swapped. At a crossover the two hop
+   * fields describe the same AS and the reservation spans it: the egress is the one of the next hop
+   * field, read under that hop field's own construction direction. A peering boundary is not a
+   * crossover (see {@link #getCrossOver}), so no swap with the neighbour happens there.
+   *
+   * @throws IllegalArgumentException if there is no such hop field
+   */
+  public int[] getReservationInterfaces(int hopIdx) {
+    int ingress = egressOrIngressInTravelDirection(hopIdx, true);
+    int egress = egressOrIngressInTravelDirection(hopIdx, false);
+    if (getCrossOver(hopIdx) == -1) {
+      egress = egressOrIngressInTravelDirection(hopIdx + 1, false);
+    }
+    return new int[] {ingress, egress};
+  }
+
+  /**
+   * Returns the ingress ({@code wantIngress}) or egress of hop field {@code hopIdx} in traversal
+   * direction: the construction-direction value if the hop field's segment was constructed in the
+   * direction of travel, otherwise the other one.
+   */
+  private int egressOrIngressInTravelDirection(int hopIdx, boolean wantIngress) {
+    FlyoverHopField hop = getHopField(hopIdx);
+    boolean consDir = info[getSegmentIndex(hopIdx)].hasConstructionDirection();
+    if (wantIngress == consDir) {
+      return hop.getIngress();
+    }
+    return hop.getEgress();
   }
 
   public InfoField getInfoField(int i) {
