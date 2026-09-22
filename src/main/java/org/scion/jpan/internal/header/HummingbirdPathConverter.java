@@ -22,7 +22,7 @@ import org.scion.jpan.internal.util.ByteUtil;
 
 public class HummingbirdPathConverter {
 
-  private static final int INFO_FIELD_LEN = 8;
+  private static final int INFO_FIELD_LEN = HummingbirdPathRaw.INFO_FIELD_LEN;
   private static final int HOP_FIELD_LEN =
       HummingbirdPathRaw.HOP_LINES * HummingbirdPathRaw.LINE_LEN;
   private static final int FLYOVER_FIELD_LEN =
@@ -39,7 +39,7 @@ public class HummingbirdPathConverter {
    *
    * @param baseTs seconds of the packet timestamp, a field SCION does not have
    * @param millis sub-second part of the same instant, 0..999
-   * @param counter 22-bit per-packet counter; together with millis it forms HighResTS
+   * @param counter 22-bit per-packet counter. Together with millis it forms HighResTS
    */
   public static byte[] convertFromScion(byte[] scionPath, long baseTs, int millis, int counter) {
     int i0 = ByteBuffer.wrap(scionPath).getInt();
@@ -128,11 +128,7 @@ public class HummingbirdPathConverter {
       throw new IllegalArgumentException("Hop field " + hopIndex + " already has a flyover");
     }
 
-    // Where this hop field starts
-    int hopOffset =
-        HummingbirdPathRaw.META_LEN
-            + p.getSegmentCount() * INFO_FIELD_LEN
-            + p.getHopStartLine(hopIndex) * HummingbirdPathRaw.LINE_LEN;
+    int hopOffset = p.getHopFieldOffset(hopIndex);
 
     // The hop field is two lines longer now, so we need to adjust segLen
     int[] segLen = new int[3];
