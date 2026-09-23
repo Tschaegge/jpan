@@ -19,44 +19,24 @@ import static org.scion.jpan.internal.util.ByteUtil.readInt;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.stream.IntStream;
 import org.scion.jpan.internal.header.PathRawParser.HopField;
 import org.scion.jpan.internal.header.PathRawParser.InfoField;
 
 /**
- * Read-only parser for a Hummingbird dataplane path (SCION path type 5).
- *
- * <p>The layout differs from a SCION path in two ways: the path meta header is 12 bytes instead of
- * 4, and a hop field carrying a flyover reservation is 20 bytes instead of 12. {@code CurrHF} and
- * {@code SegLen} count 4-byte <b>lines</b>, not hop fields, which makes the line count ambiguous
- * (15 lines is 5 standard hop fields or 3 flyover hop fields). Hop fields are therefore walked
- * rather than indexed, using the flyover bit of each hop field to decide the stride.
+ * Read-only parser for a Hummingbird dataplane path (SCION path type 5). The wire format is
+ * specified in Appendix A of the Hummingbird paper, https://doi.org/10.1145/3718958.3750495.
  */
 public class HummingbirdPathRaw {
 
-  /** Length of the path meta header in bytes (4 bytes in SCION). */
   public static final int META_LEN = 12;
-
-  /** Length of one 4-byte line, the unit counted by {@code CurrHF} and {@code SegLen}. */
   public static final int LINE_LEN = 4;
-
-  /** Lines occupied by a hop field without a flyover. */
   public static final int HOP_LINES = 3;
-
-  /** Lines occupied by a hop field carrying a flyover. */
   public static final int FLYOVER_LINES = 5;
-
-  /**
-   * Upper bound on hop fields, matching the bound PathRawParser uses for SCION. A 7-bit SegLen
-   * allows up to 381 lines, hence up to 127 hop fields, so a malformed header can exceed this; the
-   * walk rejects that explicitly instead of overrunning the array.
-   */
   static final int MAX_HOP_FIELDS = 64;
 
   // path meta header
   private int currINF; // 2 bits
   private int currHF; // 8 bits, counts lines
-  private int reserved; // 1 bit
   private final int[] segLen = new int[3]; // 7 bits each, counts lines
   private int baseTsRaw; // 32 bits, "raw" because the field type is unsigned
   private int highResTsRaw; // 32 bits: MillisTimestamp (10) | Counter (22)
@@ -64,13 +44,15 @@ public class HummingbirdPathRaw {
   private final InfoField[] info = new InfoField[3];
   private final FlyoverHopField[] hops = new FlyoverHopField[MAX_HOP_FIELDS];
   private int numHops;
-  private final int[] hopSegment = new int[MAX_HOP_FIELDS];
+  private final int[] hopsPerSegment = new int[3];
+  private final int[] hopStartLine = new int[MAX_HOP_FIELDS];
+
   private int len;
 
-  public static HummingbirdPathRaw create(byte[] rawPath) {
+  public static HummingbirdPathRaw create(ByteBuffer data) {
     HummingbirdPathRaw p = new HummingbirdPathRaw();
-    if (rawPath.length != 0) {
-      p.read(ByteBuffer.wrap(rawPath));
+    if (data.hasRemaining()) {
+      p.read(data.duplicate()); // same bytes, own position: data's position stays where it is
     }
     return p;
   }
@@ -87,7 +69,7 @@ public class HummingbirdPathRaw {
     int i0 = data.getInt();
     currINF = readInt(i0, 0, 2);
     currHF = readInt(i0, 2, 8);
-    reserved = readInt(i0, 10, 1);
+    // bit 10 is reserved
     for (int i = 0; i < segLen.length; i++) {
       segLen[i] = readInt(i0, 11 + 7 * i, 7);
     }
@@ -103,13 +85,14 @@ public class HummingbirdPathRaw {
     int totalLines = segLen[0] + segLen[1] + segLen[2];
     int lines = 0;
     numHops = 0;
+    // Hop fields are 3 or 5 lines wide, so the line count does not tell us how many there are.
     while (lines < totalLines) {
       if (numHops == MAX_HOP_FIELDS) {
         throw new IllegalArgumentException("Too many hop fields, maximum is " + MAX_HOP_FIELDS);
       }
-      // returns which segment the connection is part of, up(0),core(1) or down(2)
-      hopSegment[numHops] = segmentOfLine(lines);
-      hops[numHops].read(data);
+      hopsPerSegment[segmentOfLine(lines)]++;
+      hopStartLine[numHops] = lines;
+      hops[numHops].read(data); // reads (flyover) hop fields
       lines += hops[numHops].length() / LINE_LEN;
       numHops++;
     }
@@ -122,14 +105,15 @@ public class HummingbirdPathRaw {
     len = data.position() - start;
   }
 
+  /** Returns which segment the connection is part of: up (0), core (1), or down (2). */
   private int segmentOfLine(int line) {
-    if (line < segLen[0]){
-       return 0;
+    if (line < segLen[0]) {
+      return 0;
     }
     return (line < segLen[0] + segLen[1]) ? 1 : 2;
   }
 
-  /** Number of bytes consumed by this path. */
+  /** Returns the number of bytes used by this path. */
   public int length() {
     return len;
   }
@@ -138,16 +122,26 @@ public class HummingbirdPathRaw {
     return currINF;
   }
 
-  /** Offset of the current hop field, in 4-byte lines from the first hop field. */
   public int getCurrHF() {
     return currHF;
   }
 
-  /** Length of segment {@code i} in 4-byte lines. */
+  /** Returns the index of the hop field that starts at {@code CurrHF}, or -1 if none does. */
+  public int getCurrentHopIndex() {
+    for (int i = 0; i < numHops; i++) {
+      if (hopStartLine[i] == currHF) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** Returns the length of segment {@code i} in 4-byte lines. */
   public int getSegLen(int i) {
     return segLen[i];
   }
 
+  /** Returns the number of segments used for the connection. */
   public int getSegmentCount() {
     int n = 0;
     for (int i = 0; i < segLen.length && segLen[i] > 0; i++) {
@@ -156,44 +150,90 @@ public class HummingbirdPathRaw {
     return n;
   }
 
-  public int getSegmentHopCount(int seg) {
-    if (seg < 0 || seg > 2){
-      throw new IllegalArgumentException("segment needs to be between 0 and 2");
+  /**
+   * Returns whether hop field {@code hopIdx} is one of the two hop fields of a segment crossover.
+   * At a segment boundary the last hop field of the earlier segment and the first hop field of the
+   * later segment describe the same AS.
+   *
+   * <p>A peering link also joins two segments, but is not a crossover: the two hop fields belong to
+   * two different ASes and each is a real traversal, so both are reported as 0 and both may carry a
+   * flyover. The destination's hop field is never reported as +1 either. Both rules follow the
+   * reference's {@code IsCrossOver}.
+   *
+   * @return -1 for the last hop field of an earlier segment, +1 for the first hop field of a later
+   *     segment, 0 otherwise. Only a -1 hop field may carry a flyover at a crossover (Appendix
+   *     A.5); {@code insertFlyover} rejects +1.
+   * @throws IllegalArgumentException if there is no such hop field
+   */
+  public int getCrossOver(int hopIdx) {
+    int segmentIdx = getSegmentIndex(hopIdx);
+    int firstHop = getFirstHopOfSegment(segmentIdx);
+    boolean destination = hopIdx == numHops - 1;
+    if (segmentIdx != 0
+        && hopIdx == firstHop
+        && !destination
+        && !isPeeringBoundary(segmentIdx - 1)) {
+      return 1;
     }
-    return (int)
-        Arrays.stream(hopSegment, 0, numHops)
-            .filter(i -> i == seg)
-            .count(); // returns the number of hops in the seg
+    int lastHop = firstHop + getSegmentHopCount(segmentIdx) - 1;
+    int lastSegmentIdx = getSegmentCount() - 1;
+    if (hopIdx == lastHop && segmentIdx != lastSegmentIdx && !isPeeringBoundary(segmentIdx)) {
+      return -1;
+    }
+    return 0;
   }
 
-  public int getFirstHopOfSegment(int seg) {
-    if (seg < 0 || seg > 2){
+  /** Returns whether segments {@code seg} and {@code seg + 1} are joined by a peering link. */
+  private boolean isPeeringBoundary(int seg) {
+    if (seg < 0 || seg >= getSegmentCount() - 1) {
+      return false;
+    }
+    return info[seg].hasPeeringFlag() || info[seg + 1].hasPeeringFlag();
+  }
+
+  /** Returns the number of hop fields in segment {@code seg}, 0 if the segment is empty. */
+  public int getSegmentHopCount(int seg) {
+    if (seg < 0 || seg > 2) {
       throw new IllegalArgumentException("segment needs to be between 0 and 2");
     }
-    return IntStream.range(0, numHops).filter(i -> hopSegment[i] == seg).findFirst().orElse(-1);
+    return hopsPerSegment[seg];
+  }
+
+  /** Returns the index of the first hop field of segment {@code seg}, or -1 if it is empty. */
+  public int getFirstHopOfSegment(int seg) {
+    if (seg < 0 || seg > 2) {
+      throw new IllegalArgumentException("segment needs to be between 0 and 2");
+    }
+    if (hopsPerSegment[seg] == 0) {
+      return -1;
+    }
+    int first = 0;
+    for (int s = 0; s < seg; s++) {
+      first += hopsPerSegment[s];
+    }
+    return first;
+  }
+
+  /** Returns the line at which hop field {@code hopIdx} starts. */
+  public int getHopStartLine(int hopIdx) {
+    checkHopIndex(hopIdx);
+    return hopStartLine[hopIdx];
   }
 
   public InfoField getInfoField(int i) {
+    if (i < 0 || i >= getSegmentCount()) {
+      throw new IllegalArgumentException(
+          "No info field " + i + ", path has " + getSegmentCount() + " segment(s)");
+    }
     return info[i];
   }
 
-  /**
-   * Index of the info field that applies to hop field {@code hopIdx}, i.e. which segment the hop
-   * field belongs to. A hop field belongs to the segment its starting line falls in; the hop index
-   * alone is not enough, because hop fields are either 3 or 5 lines wide.
-   *
-   * <p>The bounds check matters: {@code hopSegment} is sized for the maximum number of hop fields,
-   * so without it an index past the end would silently return 0, which is indistinguishable from a
-   * genuine answer.
-   *
-   * @throws IllegalArgumentException if there is no such hop field
-   */
-  public int getInfoFieldIndex(int hopIdx) {
-    if (hopIdx < 0 || hopIdx >= numHops) {
-      throw new IllegalArgumentException(
-          "No hop field " + hopIdx + ", path has " + numHops + " hop field(s)");
+  public int getSegmentIndex(int hopIdx) {
+    checkHopIndex(hopIdx);
+    if (hopIdx < hopsPerSegment[0]) {
+      return 0;
     }
-    return hopSegment[hopIdx];
+    return (hopIdx < hopsPerSegment[0] + hopsPerSegment[1]) ? 1 : 2;
   }
 
   public int getHopFieldCount() {
@@ -201,23 +241,31 @@ public class HummingbirdPathRaw {
   }
 
   public FlyoverHopField getHopField(int i) {
+    checkHopIndex(i);
     return hops[i];
   }
 
-  /** Seconds part of the packet timestamp, as unsigned Unix seconds. */
+  private void checkHopIndex(int hopIdx) {
+    if (hopIdx < 0 || hopIdx >= numHops) {
+      throw new IllegalArgumentException(
+          "No hop field " + hopIdx + ", path has " + numHops + " hop field(s)");
+    }
+  }
+
+  /** Returns the seconds part of the packet timestamp, as unsigned Unix seconds. */
   public long getBaseTimestamp() {
     return Integer.toUnsignedLong(baseTsRaw);
   }
 
   /**
-   * Sub-second part of the packet timestamp in milliseconds, 0..999. This is the millisecond part
-   * of the same instant as {@link #getBaseTimestamp()}, not an offset from it.
+   * Returns the sub-second part of the packet timestamp in milliseconds, 0..999. This is the
+   * millisecond part of the same instant as {@link #getBaseTimestamp()}, not an offset from it.
    */
   public int getMillis() {
     return highResTsRaw >>> 22;
   }
 
-  /** Per-packet counter, 22 bits, used to keep the flyover MAC input unique. */
+  /** Returns the per-packet counter, 22 bits, used to keep the flyover MAC input unique. */
   public int getCounter() {
     return highResTsRaw & 0x3FFFFF;
   }
@@ -248,25 +296,18 @@ public class HummingbirdPathRaw {
 
   public static class FlyoverHopField {
 
-    /** The SCION hop field part, 12 bytes, unchanged from SCION. */
+    // The SCION hop field part, 12 bytes, unchanged from SCION.
     private final HopField hop = new HopField();
-
-    /** 1 bit : set if this hop field carries a flyover. SCION's reserved bit. */
     private boolean flyover;
-
-    // 22 bits : reservation ID, shares a 32-bit word with bw.
     private int resID;
-    // 10 bits : reserved bandwidth, encoded as exponent(5) and mantissa(5).
     private int bw;
-    // 16 bits : offset subtracted from BaseTimestamp to get the reservation start.
     private int resStartOffset;
-    // 16 bits : reservation duration in seconds.
     private int resDuration;
 
     FlyoverHopField() {}
 
     public void read(ByteBuffer data) {
-      // Peek the flyover bit without advancing: the SCION hop field must be read from byte 0.
+      // Peek the flyover bit without advancing
       flyover = readBoolean(data.getInt(data.position()), 0);
       hop.read(data);
       if (flyover) {
