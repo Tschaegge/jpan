@@ -253,6 +253,10 @@ public class PathRawParser {
       return c;
     }
 
+    public boolean hasPeeringFlag() {
+      return p;
+    }
+
     public boolean getFlagC() {
       return c;
     }

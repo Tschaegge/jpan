@@ -43,4 +43,21 @@ public class HummingbirdExamplePacket {
     -16, -30, -21, 81, -128, 63, 0, 41, 0, 0, -87, -66, 29, 58, 7, -26,
     0, 0, 7, -1, 0, 2, 0, 9,
   };
+
+  /**
+   * A path over a peering link, no flyovers: segment 0 has one hop field, segment 1 has three, and
+   * both info fields carry the peer flag. Hop fields 0 and 1 sit at the segment boundary but are
+   * two different ASes, so neither is a crossover.
+   *
+   * <p>Source: the prototype's router acceptance test case {@code
+   * HummingbirdBestEffortPeeringDownstream} (tools/braccept), as harvested by hbird-conformance
+   * from commit 97bcc2b6a.
+   */
+  public static final byte[] PATH_RAW_HBIRD_PEERING_DOWNSTREAM = {
+    65, -128, -60, -128, 106, -113, -10, -111, 125, 0, 0, 0, 2, 0, 1, 17,
+    106, -113, -10, -111, 3, 0, 2, 34, 106, -113, -10, -111, 0, 0, 0, -45,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 121, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 121, 0, -105, 88, 13, -16, 86, 61, -64,
+    0, 0, 1, -1, 0, 0, 0, 0, 0, 0, 0, 0,
+  };
 }
