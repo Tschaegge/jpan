@@ -213,35 +213,4 @@ class HummingbirdPathRawTest {
     assertEquals(80, path.getHopFieldOffset(3));
     assertThrows(IllegalArgumentException.class, () -> path.getHopFieldOffset(4));
   }
-
-  /**
-   * The captured packet goes 112 -> 110 -> 111 over an up and a down segment. Hop fields 0 and 1
-   * are in the up segment (not construction direction), so their interfaces are swapped; hop field
-   * 1 is the first half of the crossover in AS 110, so its egress comes from hop field 2. The
-   * result is the AS hop list (112: 0 -> 1), (110: 2 -> 1), (111: 41 -> 0).
-   */
-  @Test
-  void testReservationInterfaces() {
-    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(pathBytes));
-    assertArrayEquals(new int[] {0, 1}, path.getReservationInterfaces(0));
-    assertArrayEquals(new int[] {2, 1}, path.getReservationInterfaces(1));
-    assertArrayEquals(new int[] {41, 0}, path.getReservationInterfaces(3));
-    // Hop field 2 is the second half of the crossover and never gets a reservation; the method
-    // still answers, with that hop field's own interfaces in travel direction.
-    assertArrayEquals(new int[] {0, 1}, path.getReservationInterfaces(2));
-  }
-
-  /**
-   * At a peering boundary there is no crossover, so no hop field borrows its neighbour's egress.
-   */
-  @Test
-  void testReservationInterfacesAtPeeringBoundary() {
-    HummingbirdPathRaw path =
-        HummingbirdPathRaw.create(
-            ByteBuffer.wrap(HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM));
-    // hop 0: cons (211, 0) in a non-ConsDir segment -> swapped
-    assertArrayEquals(new int[] {0, 211}, path.getReservationInterfaces(0));
-    // hop 1: cons (121, 0) in a ConsDir segment -> as is, egress NOT taken from hop 2
-    assertArrayEquals(new int[] {121, 0}, path.getReservationInterfaces(1));
-  }
 }

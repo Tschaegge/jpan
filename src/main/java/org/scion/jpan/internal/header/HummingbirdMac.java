@@ -14,6 +14,8 @@
 
 package org.scion.jpan.internal.header;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
+
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import javax.crypto.Cipher;
@@ -85,13 +87,5 @@ public final class HummingbirdMac {
       out[i] = (byte) (scionMac[i] ^ flyoverMac[i]);
     }
     return out;
-  }
-
-  /** A value that does not fit its field would leak into the neighbouring field. Check first. */
-  private static void checkWidth(String name, int value, int bits) {
-    if (value < 0 || value >= (1 << bits)) {
-      throw new IllegalArgumentException(
-          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
-    }
   }
 }

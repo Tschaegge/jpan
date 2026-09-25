@@ -14,6 +14,7 @@
 
 package org.scion.jpan.internal.header;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
 import static org.scion.jpan.internal.util.ByteUtil.readInt;
 import static org.scion.jpan.internal.util.ByteUtil.writeInt;
 
@@ -161,16 +162,5 @@ public class HummingbirdPathConverter {
       word = writeInt(word, 11 + 7 * seg, 7, segLen[seg]);
     }
     return word;
-  }
-
-  /**
-   * {@link ByteUtil#writeInt} does not mask, so a value that does not fit its field would leak into
-   * the neighbouring field. Check first.
-   */
-  private static void checkWidth(String name, int value, int bits) {
-    if (value < 0 || value >= (1 << bits)) {
-      throw new IllegalArgumentException(
-          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
-    }
   }
 }
