@@ -14,6 +14,8 @@
 
 package org.scion.jpan.testutil;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
+
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -96,14 +98,6 @@ public final class HummingbirdKeys {
       return svCipher.doFinal(block);
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(e); // one full block, no padding: cannot happen
-    }
-  }
-
-  /** A value that does not fit its field would leak into the neighbouring field. Check first. */
-  private static void checkWidth(String name, int value, int bits) {
-    if (value < 0 || value >= (1 << bits)) {
-      throw new IllegalArgumentException(
-          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
     }
   }
 }

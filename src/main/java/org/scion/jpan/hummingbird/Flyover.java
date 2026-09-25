@@ -14,7 +14,10 @@
 
 package org.scion.jpan.hummingbird;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
+
 import java.util.Arrays;
+import org.scion.jpan.internal.header.HummingbirdMac;
 
 /**
  * One Hummingbird reservation as the endhost receives it from the issuing AS: which interface pair
@@ -22,8 +25,7 @@ import java.util.Arrays;
  * packet sent over it.
  *
  * <p>Immutable. {@code ingress} and {@code egress} are in traversal direction, the direction the
- * packet travels, which is what the router derives Ak from; see {@code
- * HummingbirdPathRaw.getReservationInterfaces}.
+ * packet travels, which is what the router derives Ak from.
  */
 public final class Flyover {
 
@@ -37,8 +39,17 @@ public final class Flyover {
 
   public Flyover(
       int ingress, int egress, int resID, int bw, long startTime, int duration, byte[] ak) {
-    // TODO: range checks like HummingbirdPathConverter.checkWidth: ingress/egress 16 bits,
-    //  resID 22, bw 10, duration 16; ak != null && ak.length == HummingbirdMac.KEY_LEN.
+    checkWidth("ingress", ingress, 16);
+    checkWidth("egress", egress, 16);
+    checkWidth("resID", resID, 22);
+    checkWidth("bw", bw, 10);
+    checkWidth("duration", duration, 16);
+    if (startTime < 0 || startTime > 0xFFFFFFFFL) { // Ak takes it as an unsigned 32-bit value
+      throw new IllegalArgumentException("startTime must fit 32 bits unsigned, got " + startTime);
+    }
+    if (ak == null || ak.length != HummingbirdMac.KEY_LEN) {
+      throw new IllegalArgumentException("ak must be " + HummingbirdMac.KEY_LEN + " bytes");
+    }
     this.ingress = ingress;
     this.egress = egress;
     this.resID = resID;
