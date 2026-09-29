@@ -22,62 +22,62 @@ import org.scion.jpan.ScionUtil;
 import org.scion.jpan.internal.header.HummingbirdMac;
 
 /**
- * The expected values are pinned vectors computed with OpenSSL, independent of both JPAN and the Go
- * reference:
- *
- * <pre>
- *   Vk: echo -n 0001ff000000011003e801027d000007 | xxd -r -p | \
- *       openssl enc -aes-128-ecb -K 25e6b97596070393ef5473671bf63a9a -nopad | xxd -p
- * </pre>
- *
- * <p>The key is the Ak of the reference's {@code TestDeriveAuthKey}, checked by {@code
- * HummingbirdKeysTest} in hbird-conformance.
+ * Tests the flyover MAC Vk, the aggregated MAC that goes into the hop field, and that inputs which
+ * do not fit their field are rejected.
  */
 class HummingbirdMacTest {
 
+  // Any 16-byte key would do; this one is the Ak of the reference's TestDeriveAuthKey.
   private static final byte[] AK = fromHex("25e6b97596070393ef5473671bf63a9a");
+
+  // Computed with OpenSSL from the inputs of testFlyoverMac:
+  //   echo -n "0001ff0000000110 03e8 0102 7d000007" | xxd -r -p |
+  //     openssl enc -aes-128-ecb -K 25e6b97596070393ef5473671bf63a9a -nopad | xxd -p
   private static final byte[] EXPECTED_VK = fromHex("59b4bad6993ab19700c508e931e8f005");
 
   @Test
   void testFlyoverMac() {
-    long dstIsdAs = ScionUtil.parseIA("1-ff00:0:110");
-    assertEquals(0x0001ff0000000110L, dstIsdAs); // the value baked into the OpenSSL vector
-    int pktLen = 1000; // 0x03e8
-    int resStartTime = 0x0102;
-    int highResTs = (500 << 22) | 7; // 0x7d000007: 500 millis, counter 7
+    long dstIsdAs = ScionUtil.parseIA("1-ff00:0:110"); // 0001ff0000000110
+    int pktLen = 1000; // 03e8
+    int resStartTime = 0x0102; // 0102
+    int highResTs = (500 << 22) | 7; // 7d000007: 500 ms, counter 7
 
     Cipher akCipher = HummingbirdMac.createCipher(AK);
     byte[] vk = HummingbirdMac.flyoverMac(akCipher, dstIsdAs, pktLen, resStartTime, highResTs);
     assertArrayEquals(EXPECTED_VK, vk);
-    // Repeat with the same cipher: must yield the same result (the cipher holds no state).
+
+    // One cipher per Ak is reused for every packet, so a second call must give the same Vk.
     vk = HummingbirdMac.flyoverMac(akCipher, dstIsdAs, pktLen, resStartTime, highResTs);
     assertArrayEquals(EXPECTED_VK, vk);
   }
 
+  /** The aggregated MAC is the SCION MAC XOR the first 6 bytes of Vk. */
   @Test
   void testAggregateMac() {
-    byte[] scionMac = fromHex("c47cf0e2eb51");
+    byte[] scionMac = fromHex("c47cf0e2eb51"); // any 6 bytes
     byte[] aggregated = HummingbirdMac.aggregateMac(scionMac, EXPECTED_VK);
-    for (int i = 0; i < HummingbirdMac.MAC_LEN; i++) {
-      assertEquals((byte) (scionMac[i] ^ EXPECTED_VK[i]), aggregated[i]);
-    }
-    // XOR is an involution: aggregating again restores the SCION MAC.
+    assertArrayEquals(fromHex("9dc84a34726b"), aggregated); // c4^59, 7c^b4, f0^ba, ...
+
+    // The router XORs Vk in once more to get the SCION MAC back.
     assertArrayEquals(scionMac, HummingbirdMac.aggregateMac(aggregated, EXPECTED_VK));
   }
 
   @Test
-  void testFieldWidths() {
+  void testInputsMustFit() {
     Cipher akCipher = HummingbirdMac.createCipher(AK);
     assertThrows(
         IllegalArgumentException.class,
-        () -> HummingbirdMac.flyoverMac(akCipher, 0, 1 << 16, 0, 0));
+        () -> HummingbirdMac.flyoverMac(akCipher, 0, 1 << 16, 0, 0)); // pktLen 16 bits
     assertThrows(
-        IllegalArgumentException.class, () -> HummingbirdMac.flyoverMac(akCipher, 0, 0, -1, 0));
+        IllegalArgumentException.class,
+        () -> HummingbirdMac.flyoverMac(akCipher, 0, 0, -1, 0)); // resStartTime >= 0
+
+    // The key must have exactly 16 bytes.
     assertThrows(IllegalArgumentException.class, () -> HummingbirdMac.createCipher(new byte[15]));
     assertThrows(IllegalArgumentException.class, () -> HummingbirdMac.createCipher(new byte[32]));
   }
 
-  static byte[] fromHex(String hex) {
+  private static byte[] fromHex(String hex) {
     byte[] out = new byte[hex.length() / 2];
     for (int i = 0; i < out.length; i++) {
       out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);

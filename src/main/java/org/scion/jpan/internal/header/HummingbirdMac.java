@@ -20,9 +20,9 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * The per packet cryptography of a Hummingbird endhost: the flyover MAC Vk (one AES block keyed
- * with the reservation's Ak) and Vk[0:6] XOR SCION MAC as the aggregated MAC carried by a flyover
- * hop field.
+ * The MACs a Hummingbird endhost computes for every packet: the flyover MAC Vk, one AES block keyed
+ * with the reservation's Ak, and the aggregated MAC that goes into the hop field, the first 6 bytes
+ * of Vk XOR the SCION MAC.
  */
 public final class HummingbirdMac {
 
@@ -87,7 +87,7 @@ public final class HummingbirdMac {
     return out;
   }
 
-  /** A value that does not fit its field would leak into the neighbouring field. Check first. */
+  /** A value that does not fit its field would leak into the neighbouring field. */
   private static void checkWidth(String name, int value, int bits) {
     if (value < 0 || value >= (1 << bits)) {
       throw new IllegalArgumentException(
