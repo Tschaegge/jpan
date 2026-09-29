@@ -30,8 +30,8 @@ import org.scion.jpan.internal.header.HummingbirdMac;
  *       openssl enc -aes-128-ecb -K 25e6b97596070393ef5473671bf63a9a -nopad | xxd -p
  * </pre>
  *
- * <p>The Ak used as key is the one {@code HummingbirdKeysTest} derives from the inputs of the
- * reference's {@code TestDeriveAuthKey}.
+ * <p>The key is the Ak of the reference's {@code TestDeriveAuthKey}, checked by {@code
+ * HummingbirdKeysTest} in hbird-conformance.
  */
 class HummingbirdMacTest {
 
