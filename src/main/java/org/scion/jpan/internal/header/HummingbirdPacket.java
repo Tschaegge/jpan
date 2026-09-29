@@ -28,8 +28,9 @@ public final class HummingbirdPacket {
   /**
    * Writes {@code scionPacket} as a Hummingbird packet without flyovers into {@code hbirdPacket}.
    * The SCION path is replaced by a Hummingbird path, which is 8 bytes longer because the
-   * Hummingbird meta header has 12 bytes instead of 4, so HdrLen grows by 2. The bytes behind the
-   * path (UDP header and payload) are copied unchanged.
+   * Hummingbird meta header has 12 bytes instead of 4, so HdrLen grows by 2. The new meta header
+   * carries the packet timestamp. The bytes behind the path (UDP header and payload) are copied
+   * unchanged.
    *
    * <p>Like {@link ScionHeaderParser#write}, this writes at the position of {@code hbirdPacket} and
    * leaves the position behind the packet, so the caller flips the buffer before sending. The
@@ -37,10 +38,14 @@ public final class HummingbirdPacket {
    *
    * @param scionPacket the SCION packet, from its position to its limit
    * @param hbirdPacket the buffer to write the Hummingbird packet into
+   * @param baseTs seconds of the packet timestamp (Unix time)
+   * @param millis sub-second part of the same instant, 0..999
+   * @param counter 22-bit per-packet counter. Together with millis it forms HighResTS
    * @throws IllegalArgumentException if the packet has no path, or if the Hummingbird header would
    *     be longer than HdrLen can describe (8 bits of 4-byte units, at most 1020 bytes)
    */
-  public static void fromScion(ByteBuffer scionPacket, ByteBuffer hbirdPacket) {
+  public static void fromScion(
+      ByteBuffer scionPacket, ByteBuffer hbirdPacket, long baseTs, int millis, int counter) {
     // Own position and limit, and index 0 is the first byte of the packet. The ScionHeaderParser
     // helpers read at fixed indices (4, 5, 8).
     ByteBuffer in = scionPacket.slice();
@@ -61,7 +66,7 @@ public final class HummingbirdPacket {
 
     int start = hbirdPacket.position();
     hbirdPacket.put(head);
-    HummingbirdPathConverter.convertFromScion(path, hbirdPacket, 0, 0, 0);
+    HummingbirdPathConverter.convertFromScion(path, hbirdPacket, baseTs, millis, counter);
     int newHeaderLength = hbirdPacket.position() - start; // common + address + Hummingbird path
     checkWidth("HdrLen", newHeaderLength / 4, 8); // a cast to byte would silently wrap 256 to 0
     hbirdPacket.put(tail);

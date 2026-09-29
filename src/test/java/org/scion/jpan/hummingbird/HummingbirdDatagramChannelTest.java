@@ -27,6 +27,7 @@ import org.scion.jpan.PackageVisibilityHelper;
 import org.scion.jpan.RequestPath;
 import org.scion.jpan.Scion;
 import org.scion.jpan.ScionUtil;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.ExamplePacket;
 import org.scion.jpan.testutil.MockDatagramChannel;
 
@@ -101,5 +102,33 @@ class HummingbirdDatagramChannelTest {
     }
     assertEquals(1, sent.size());
     assertHummingbird(sent.get(0), 11);
+  }
+
+  /** Every packet carries the time it was sent, and the counter goes up by one per packet. */
+  @Test
+  void testTimestamps() throws IOException {
+    long before = System.currentTimeMillis() / 1000;
+    try (Scion.CloseableService service = Scion.newServiceWithTopologyFile(TOPO_112);
+        HummingbirdDatagramChannel channel =
+            HummingbirdDatagramChannel.open(service, recordingMock())) {
+      channel.bind(new InetSocketAddress("127.0.0.1", 44444));
+      channel.send(ByteBuffer.wrap("one".getBytes()), path());
+      channel.send(ByteBuffer.wrap("two".getBytes()), path());
+    }
+    long after = System.currentTimeMillis() / 1000;
+    assertEquals(2, sent.size());
+
+    // The path starts at byte 36: 12 bytes common header, 16 bytes ISD-AS, 4 + 4 bytes addresses.
+    ByteBuffer packet1 = ByteBuffer.wrap(sent.get(0));
+    packet1.position(36);
+    HummingbirdPathRaw path1 = HummingbirdPathRaw.create(packet1);
+    ByteBuffer packet2 = ByteBuffer.wrap(sent.get(1));
+    packet2.position(36);
+    HummingbirdPathRaw path2 = HummingbirdPathRaw.create(packet2);
+
+    assertTrue(before <= path1.getBaseTimestamp() && path1.getBaseTimestamp() <= after);
+    assertTrue(path1.getMillis() < 1000);
+    assertEquals(0, path1.getCounter()); // a new channel starts at 0
+    assertEquals(1, path2.getCounter());
   }
 }

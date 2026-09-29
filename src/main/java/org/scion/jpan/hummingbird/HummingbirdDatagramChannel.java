@@ -40,6 +40,11 @@ public class HummingbirdDatagramChannel extends ScionDatagramChannel {
   // JPAN ever hand over a larger packet.
   private ByteBuffer hbirdBuffer = ByteBuffer.allocateDirect(DEFAULT_BUFFER_SIZE + 8);
 
+  // The low 22 bits of HighResTS, one step per packet, so that packets sent in the same
+  // millisecond still differ. Wraps like the reference's counter (pkg/snet/path/hummingbird.go).
+  // Only sendRaw touches it, and JPAN calls sendRaw under the channel's write lock.
+  private int counter = 0;
+
   protected HummingbirdDatagramChannel(
       ScionService service,
       DatagramChannel channel,
@@ -86,7 +91,9 @@ public class HummingbirdDatagramChannel extends ScionDatagramChannel {
       hbirdBuffer = ByteBuffer.allocateDirect(requiredSize);
     }
     hbirdBuffer.clear();
-    HummingbirdPacket.fromScion(scionPacket, hbirdBuffer);
+    long now = System.currentTimeMillis();
+    HummingbirdPacket.fromScion(scionPacket, hbirdBuffer, now / 1000, (int) (now % 1000), counter);
+    counter = (counter + 1) & 0x3FFFFF; // 22 bits
     hbirdBuffer.flip();
 
     int hbirdLength = hbirdBuffer.remaining();

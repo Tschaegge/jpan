@@ -41,6 +41,7 @@ public class HummingbirdPathConverter {
    * @param baseTs seconds of the packet timestamp, a field SCION does not have
    * @param millis sub-second part of the same instant, 0..999
    * @param counter 22-bit per-packet counter. Together with millis it forms HighResTS
+   * @throws IllegalArgumentException if millis does not fit 10 bits or counter 22 bits
    */
   public static byte[] convertFromScion(byte[] scionPath, long baseTs, int millis, int counter) {
     ByteBuffer out = ByteBuffer.allocate(scionPath.length + 8); // meta header grows from 4 to 12
@@ -55,6 +56,9 @@ public class HummingbirdPathConverter {
    */
   public static void convertFromScion(
       ByteBuffer scionPath, ByteBuffer out, long baseTs, int millis, int counter) {
+    // HighResTS is millis << 22 | counter: a counter of 22 bits or more would run into the millis.
+    checkWidth("millis", millis, 10);
+    checkWidth("counter", counter, 22);
     int i0 = scionPath.duplicate().getInt();
 
     // SCION counts hop fields, Hummingbird counts 4-byte lines. A hop field is 3 lines.

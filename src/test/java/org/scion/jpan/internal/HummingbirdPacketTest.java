@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.scion.jpan.internal.header.HummingbirdPacket;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.ExamplePacket;
+import org.scion.jpan.testutil.HummingbirdExamplePacket;
 
 class HummingbirdPacketTest {
 
@@ -33,7 +34,7 @@ class HummingbirdPacketTest {
   void testFromScion() {
     ByteBuffer in = ByteBuffer.wrap(ExamplePacket.PACKET_BYTES_CLIENT_E2E_PING);
     ByteBuffer out = ByteBuffer.allocate(200);
-    HummingbirdPacket.fromScion(in, out);
+    HummingbirdPacket.fromScion(in, out, 0, 0, 0);
     out.flip();
 
     assertEquals(0, in.position()); // the input buffer did not move
@@ -69,12 +70,31 @@ class HummingbirdPacketTest {
     ByteBuffer in = ByteBuffer.wrap(ExamplePacket.PACKET_BYTES_CLIENT_E2E_PING);
     ByteBuffer out = ByteBuffer.allocate(200);
     out.position(10);
-    HummingbirdPacket.fromScion(in, out);
+    HummingbirdPacket.fromScion(in, out, 0, 0, 0);
 
     assertEquals(10 + 111, out.position());
     assertEquals(0, out.get(5)); // untouched
     assertEquals(23, out.get(10 + 5));
     assertEquals(5, out.get(10 + 8));
+  }
+
+  /**
+   * BaseTS and HighResTS follow the first word of the meta header. Stamped with the clock of the Go
+   * capture, they must be the capture's bytes.
+   */
+  @Test
+  void testFromScionTimestamps() {
+    ByteBuffer in = ByteBuffer.wrap(ExamplePacket.PACKET_BYTES_CLIENT_E2E_PING);
+    ByteBuffer out = ByteBuffer.allocate(200);
+    HummingbirdPacket.fromScion(in, out, 1786710247L, 72, 4);
+
+    assertEquals(0x6a7f08e7, out.getInt(48 + 4)); // BaseTS 1786710247
+    assertEquals(0x12000004, out.getInt(48 + 8)); // HighResTS: 72 ms << 22 | counter 4
+
+    // The same 8 bytes in the Go capture, whose path starts at 36 (IPv4 destination).
+    ByteBuffer go = ByteBuffer.wrap(HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111);
+    assertEquals(go.getInt(36 + 4), out.getInt(48 + 4));
+    assertEquals(go.getInt(36 + 8), out.getInt(48 + 8));
   }
 
   /**
@@ -95,7 +115,7 @@ class HummingbirdPacketTest {
     Exception e =
         assertThrows(
             IllegalArgumentException.class,
-            () -> HummingbirdPacket.fromScion(ByteBuffer.wrap(packet), out));
+            () -> HummingbirdPacket.fromScion(ByteBuffer.wrap(packet), out, 0, 0, 0));
     assertTrue(e.getMessage().contains("HdrLen"), e.getMessage());
   }
 }

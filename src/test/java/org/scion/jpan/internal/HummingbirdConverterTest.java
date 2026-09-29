@@ -144,4 +144,16 @@ public class HummingbirdConverterTest {
         IllegalArgumentException.class,
         () -> HummingbirdPathConverter.insertFlyover(stripped, 4, 1, 1023, 2, 9));
   }
+
+  @Test
+  void testConvertFromScionRejectsBadTimestamp() {
+    // millis is a 10-bit field
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.convertFromScion(scionPathtiny, 0, 1 << 10, 0));
+    // counter is a 22-bit field, 1 << 22 would overwrite the lowest millis bit
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.convertFromScion(scionPathtiny, 0, 0, 1 << 22));
+  }
 }
