@@ -487,6 +487,7 @@ public class ScionHeaderParser {
       ByteBuffer data,
       int userPacketLength,
       int pathHeaderLength,
+      int pathType,
       long srcIsdAs,
       byte[] srcAddress,
       long dstIsdAs,
@@ -508,7 +509,7 @@ public class ScionHeaderParser {
     i1 = ByteUtil.writeInt(i1, 8, 8, newHdrLen); // HdrLen = bytes/4
     i1 = ByteUtil.writeInt(i1, 16, 16, userPacketLength); // PayloadLen (+ overlay!)
     data.putInt(i1);
-    i2 = ByteUtil.writeInt(i2, 0, 8, pathHeaderLength > 0 ? 1 : 0); // PathType : SCION = 1
+    i2 = ByteUtil.writeInt(i2, 0, 8, pathType); // PathType, e.g. SCION = 1
     i2 = ByteUtil.writeInt(i2, 8, 2, 0); // DT
     i2 = ByteUtil.writeInt(i2, 10, 2, dl); // DL
     i2 = ByteUtil.writeInt(i2, 12, 2, 0); // ST

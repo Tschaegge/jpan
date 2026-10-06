@@ -15,8 +15,10 @@
 package org.scion.jpan;
 
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Objects;
+import org.scion.jpan.internal.header.HeaderConstants;
 
 /**
  * A Path is an InetSocketAddress/ISD/AS of a destination host plus a path to that host.
@@ -53,6 +55,16 @@ public abstract class Path {
 
   public byte[] getRawPath() {
     return pathRaw;
+  }
+
+  public int getPathType() {
+    return pathRaw.length > 0
+        ? HeaderConstants.PathTypes.SCION.code()
+        : HeaderConstants.PathTypes.EMPTY.code();
+  }
+
+  public void writePath(ByteBuffer buffer, int packetLength) {
+    buffer.put(pathRaw);
   }
 
   public InetSocketAddress getFirstHopAddress() {

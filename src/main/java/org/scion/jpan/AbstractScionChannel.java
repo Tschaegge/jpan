@@ -766,8 +766,7 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
         srcAddress = rPath.getLocalAddress();
         port.set(rPath.getLocalPort());
       } else {
-        RequestPath rPath = (RequestPath) path;
-        srcIsdAs = rPath.getLocalIsdAs();
+        srcIsdAs = path.getLocalIsdAs();
         InetSocketAddress src = getSourceAddress(path);
         srcAddress = src.getAddress();
         port.set(src.getPort());
@@ -778,13 +777,16 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
           buffer,
           payloadLength,
           rawPath.length,
+          path.getPathType(),
           srcIsdAs,
           srcAddress.getAddress(),
           path.getRemoteIsdAs(),
           path.getRemoteAddress().getAddress(),
           hdrTypeId,
           cfgTrafficClass);
-      ScionHeaderParser.writePath(buffer, rawPath);
+      // The whole packet: common and address header (written), path, and payload.
+      int packetLength = buffer.position() + rawPath.length + payloadLength;
+      path.writePath(buffer, packetLength);
     }
   }
 
