@@ -16,10 +16,6 @@ package org.scion.jpan.hummingbird;
 
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-
-import javax.crypto.Cipher;
-
 import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
 import org.scion.jpan.RequestPath;
@@ -33,32 +29,30 @@ public class ReservedPath extends Path {
   private final Path scionPath;
   private int counter = 0; // low 22 bits of HighResTS, one step per packet
   private final Flyover[] flyovers;
-  private final Cipher[] akCiphers;
-
+  private final HummingbirdMac[] macs; // one per flyover, same index; null where there is none
 
   public ReservedPath(Path scionPath, Flyover[] flyovers) {
 
     super(
-      toHummingbird(scionPath, flyovers),
-      scionPath.getFirstHopAddress(),
-      scionPath.getLocalIsdAs(),
-      scionPath.getRemoteIsdAs(),
-      scionPath.getRemoteAddress(),
-      scionPath.getRemotePort());
-      this.scionPath = scionPath;
-      this.flyovers = flyovers.clone();
-      this.akCiphers = new Cipher[flyovers.length];
-      for (int i = 0; i < flyovers.length; i++) {
-        if (flyovers[i] != null) {
-          akCiphers[i] = HummingbirdMac.createCipher(flyovers[i].getAk());
-        }
-      }     
-
+        toHummingbird(scionPath, flyovers),
+        scionPath.getFirstHopAddress(),
+        scionPath.getLocalIsdAs(),
+        scionPath.getRemoteIsdAs(),
+        scionPath.getRemoteAddress(),
+        scionPath.getRemotePort());
+    this.scionPath = scionPath;
+    this.flyovers = flyovers.clone();
+    this.macs = new HummingbirdMac[flyovers.length];
+    for (int i = 0; i < flyovers.length; i++) {
+      if (flyovers[i] != null) {
+        macs[i] = new HummingbirdMac(flyovers[i].getAk());
+      }
+    }
   }
 
   public ReservedPath(Path scionPath) {
-  this(scionPath, new Flyover[0]); // no flyovers
-}
+    this(scionPath, new Flyover[0]); // no flyovers
+  }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
     if (!(scionPath instanceof RequestPath)) {
@@ -71,12 +65,12 @@ public class ReservedPath extends Path {
     for (int i = 0; i < flyovers.length; i++) {
       Flyover f = flyovers[i];
       if (f != null) {
-        path = HummingbirdPathConverter.insertFlyover(path, i, f.getResID(),f.getBw(), 0, f.getDuration());
-  }
-}
-return path;
-
-
+        path =
+            HummingbirdPathConverter.insertFlyover(
+                path, i, f.getResID(), f.getBw(), 0, f.getDuration());
+      }
+    }
+    return path;
   }
 
   @Override
@@ -105,7 +99,7 @@ return path;
     buffer.putInt(start + 4, baseTs);
     buffer.putInt(start + 8, highResTs);
 
-     HummingbirdPathRaw raw = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
+    HummingbirdPathRaw raw = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
     for (int i = 0; i < flyovers.length; i++) {
       Flyover f = flyovers[i];
       if (f == null) {
@@ -116,13 +110,9 @@ return path;
       int resStartOffset = (int) (now / 1000 - f.getStartTime());
       buffer.putShort(start + hop + 16, (short) resStartOffset);
 
-      byte[] vk = HummingbirdMac.flyoverMac(akCiphers[i], getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
-      byte[] scionMac = Arrays.copyOfRange(getRawPath(), hop + 6, hop + 12);
-      byte[] aggMac = HummingbirdMac.aggregateMac(scionMac, vk);
-      for (int j = 0; j < aggMac.length; j++) {
-        buffer.put(start + hop + 6 + j, aggMac[j]);
-      }
-  }
+      byte[] vk = macs[i].flyoverMac(getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
+      HummingbirdMac.aggregateMac(buffer, start + hop + 6, vk); // the SCION MAC is already there
+    }
 
     counter = (counter + 1) & 0x3FFFFF;
   }

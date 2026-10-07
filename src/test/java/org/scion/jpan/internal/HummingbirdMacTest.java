@@ -16,7 +16,7 @@ package org.scion.jpan.internal;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import javax.crypto.Cipher;
+import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 import org.scion.jpan.ScionUtil;
 import org.scion.jpan.internal.header.HummingbirdMac;
@@ -42,39 +42,40 @@ class HummingbirdMacTest {
     int resStartTime = 0x0102; // 0102
     int highResTs = (500 << 22) | 7; // 7d000007: 500 ms, counter 7
 
-    Cipher akCipher = HummingbirdMac.createCipher(AK);
-    byte[] vk = HummingbirdMac.flyoverMac(akCipher, dstIsdAs, pktLen, resStartTime, highResTs);
+    HummingbirdMac mac = new HummingbirdMac(AK);
+    byte[] vk = mac.flyoverMac(dstIsdAs, pktLen, resStartTime, highResTs);
     assertArrayEquals(EXPECTED_VK, vk);
 
-    // One cipher per Ak is reused for every packet, so a second call must give the same Vk.
-    vk = HummingbirdMac.flyoverMac(akCipher, dstIsdAs, pktLen, resStartTime, highResTs);
+    // One instance per flyover is reused for every packet, so a second call must give the same Vk.
+    vk = mac.flyoverMac(dstIsdAs, pktLen, resStartTime, highResTs);
     assertArrayEquals(EXPECTED_VK, vk);
   }
 
-  /** The aggregated MAC is the SCION MAC XOR the first 6 bytes of Vk. */
+  /** The aggregated MAC is the SCION MAC XOR the first 6 bytes of Vk, written in place. */
   @Test
   void testAggregateMac() {
-    byte[] scionMac = fromHex("c47cf0e2eb51"); // any 6 bytes
-    byte[] aggregated = HummingbirdMac.aggregateMac(scionMac, EXPECTED_VK);
-    assertArrayEquals(fromHex("9dc84a34726b"), aggregated); // c4^59, 7c^b4, f0^ba, ...
+    // The SCION MAC (any 6 bytes) sits at position 2; the bytes around it must not change.
+    ByteBuffer packet = ByteBuffer.wrap(fromHex("aaaa" + "c47cf0e2eb51" + "bbbb"));
+    HummingbirdMac.aggregateMac(packet, 2, EXPECTED_VK);
+    assertArrayEquals(fromHex("aaaa" + "9dc84a34726b" + "bbbb"), packet.array()); // c4^59, ...
+    assertEquals(0, packet.position()); // writes at fixed positions, the position does not move
 
     // The router XORs Vk in once more to get the SCION MAC back.
-    assertArrayEquals(scionMac, HummingbirdMac.aggregateMac(aggregated, EXPECTED_VK));
+    HummingbirdMac.aggregateMac(packet, 2, EXPECTED_VK);
+    assertArrayEquals(fromHex("aaaa" + "c47cf0e2eb51" + "bbbb"), packet.array());
   }
 
   @Test
   void testInputsMustFit() {
-    Cipher akCipher = HummingbirdMac.createCipher(AK);
+    HummingbirdMac mac = new HummingbirdMac(AK);
     assertThrows(
-        IllegalArgumentException.class,
-        () -> HummingbirdMac.flyoverMac(akCipher, 0, 1 << 16, 0, 0)); // pktLen 16 bits
+        IllegalArgumentException.class, () -> mac.flyoverMac(0, 1 << 16, 0, 0)); // pktLen 16 bits
     assertThrows(
-        IllegalArgumentException.class,
-        () -> HummingbirdMac.flyoverMac(akCipher, 0, 0, -1, 0)); // resStartTime >= 0
+        IllegalArgumentException.class, () -> mac.flyoverMac(0, 0, -1, 0)); // resStartTime >= 0
 
     // The key must have exactly 16 bytes.
-    assertThrows(IllegalArgumentException.class, () -> HummingbirdMac.createCipher(new byte[15]));
-    assertThrows(IllegalArgumentException.class, () -> HummingbirdMac.createCipher(new byte[32]));
+    assertThrows(IllegalArgumentException.class, () -> new HummingbirdMac(new byte[15]));
+    assertThrows(IllegalArgumentException.class, () -> new HummingbirdMac(new byte[32]));
   }
 
   private static byte[] fromHex(String hex) {
