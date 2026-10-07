@@ -16,37 +16,67 @@ package org.scion.jpan.hummingbird;
 
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+
+import javax.crypto.Cipher;
+
 import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
 import org.scion.jpan.RequestPath;
 import org.scion.jpan.internal.header.HeaderConstants;
+import org.scion.jpan.internal.header.HummingbirdMac;
 import org.scion.jpan.internal.header.HummingbirdPathConverter;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 
 public class ReservedPath extends Path {
 
   private final Path scionPath;
   private int counter = 0; // low 22 bits of HighResTS, one step per packet
+  private final Flyover[] flyovers;
+  private final Cipher[] akCiphers;
 
-  public ReservedPath(Path scionPath) {
+
+  public ReservedPath(Path scionPath, Flyover[] flyovers) {
 
     super(
-        toHummingbird(scionPath),
-        scionPath.getFirstHopAddress(),
-        scionPath.getLocalIsdAs(),
-        scionPath.getRemoteIsdAs(),
-        scionPath.getRemoteAddress(),
-        scionPath.getRemotePort());
-    this.scionPath = scionPath;
+      toHummingbird(scionPath, flyovers),
+      scionPath.getFirstHopAddress(),
+      scionPath.getLocalIsdAs(),
+      scionPath.getRemoteIsdAs(),
+      scionPath.getRemoteAddress(),
+      scionPath.getRemotePort());
+      this.scionPath = scionPath;
+      this.flyovers = flyovers.clone();
+      this.akCiphers = new Cipher[flyovers.length];
+      for (int i = 0; i < flyovers.length; i++) {
+        if (flyovers[i] != null) {
+          akCiphers[i] = HummingbirdMac.createCipher(flyovers[i].getAk());
+        }
+      }     
+
   }
 
-  private static byte[] toHummingbird(Path scionPath) {
+  public ReservedPath(Path scionPath) {
+  this(scionPath, new Flyover[0]); // no flyovers
+}
+
+  private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
     if (!(scionPath instanceof RequestPath)) {
       throw new IllegalStateException("The path must be a request path.");
     }
     if (scionPath.getRawPath().length == 0) {
       throw new IllegalArgumentException("Length of Path can't be 0");
     }
-    return HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
+    byte[] path = HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
+    for (int i = 0; i < flyovers.length; i++) {
+      Flyover f = flyovers[i];
+      if (f != null) {
+        path = HummingbirdPathConverter.insertFlyover(path, i, f.getResID(),f.getBw(), 0, f.getDuration());
+  }
+}
+return path;
+
+
   }
 
   @Override
@@ -71,8 +101,29 @@ public class ReservedPath extends Path {
     long now = System.currentTimeMillis();
     int baseTs = (int) (now / 1000);
     int millis = (int) (now % 1000);
+    int highResTs = (millis << 22) | counter;
     buffer.putInt(start + 4, baseTs);
-    buffer.putInt(start + 8, (millis << 22) | counter);
+    buffer.putInt(start + 8, highResTs);
+
+     HummingbirdPathRaw raw = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
+    for (int i = 0; i < flyovers.length; i++) {
+      Flyover f = flyovers[i];
+      if (f == null) {
+        continue; // no reservation at this hop
+      }
+      int hop = raw.getHopFieldOffset(i);
+
+      int resStartOffset = (int) (now / 1000 - f.getStartTime());
+      buffer.putShort(start + hop + 16, (short) resStartOffset);
+
+      byte[] vk = HummingbirdMac.flyoverMac(akCiphers[i], getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
+      byte[] scionMac = Arrays.copyOfRange(getRawPath(), hop + 6, hop + 12);
+      byte[] aggMac = HummingbirdMac.aggregateMac(scionMac, vk);
+      for (int j = 0; j < aggMac.length; j++) {
+        buffer.put(start + hop + 6 + j, aggMac[j]);
+      }
+  }
+
     counter = (counter + 1) & 0x3FFFFF;
   }
 }
