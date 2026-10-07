@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package org.scion.jpan.hummingbird;
 
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-
 import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
 import org.scion.jpan.RequestPath;
@@ -30,27 +28,26 @@ public class ReservedPath extends Path {
   private int counter = 0; // low 22 bits of HighResTS, one step per packet
 
   public ReservedPath(Path scionPath) {
-    
-  super(
-        toHummingbird(scionPath), 
-        scionPath.getFirstHopAddress(), 
+
+    super(
+        toHummingbird(scionPath),
+        scionPath.getFirstHopAddress(),
         scionPath.getLocalIsdAs(),
-        scionPath.getRemoteIsdAs(), 
+        scionPath.getRemoteIsdAs(),
         scionPath.getRemoteAddress(),
-        scionPath.getRemotePort()); 
+        scionPath.getRemotePort());
     this.scionPath = scionPath;
   }
 
   private static byte[] toHummingbird(Path scionPath) {
-  if (!(scionPath instanceof RequestPath)) {
+    if (!(scionPath instanceof RequestPath)) {
       throw new IllegalStateException("The path must be a request path.");
     }
-  if (scionPath.getRawPath().length == 0) {
-  throw new IllegalArgumentException("Length of Path can't be 0");
-}
-  return HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
-}
-
+    if (scionPath.getRawPath().length == 0) {
+      throw new IllegalArgumentException("Length of Path can't be 0");
+    }
+    return HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
+  }
 
   @Override
   public PathMetadata getMetadata() {
@@ -63,21 +60,19 @@ public class ReservedPath extends Path {
   }
 
   @Override
-    public int getPathType() {
-  return HeaderConstants.PathTypes.HUMMINGBIRD.code();
-}
-  
+  public int getPathType() {
+    return HeaderConstants.PathTypes.HUMMINGBIRD.code();
+  }
 
-    @Override
-    public synchronized void writePath(ByteBuffer buffer, int packetLength) {
+  @Override
+  public synchronized void writePath(ByteBuffer buffer, int packetLength) {
     int start = buffer.position();
-    buffer.put(getRawPath()); 
+    buffer.put(getRawPath());
     long now = System.currentTimeMillis();
     int baseTs = (int) (now / 1000);
-    int millis = (int) (now % 1000); 
+    int millis = (int) (now % 1000);
     buffer.putInt(start + 4, baseTs);
     buffer.putInt(start + 8, (millis << 22) | counter);
-    counter = (counter + 1) & 0x3FFFFF; 
-    }
-
+    counter = (counter + 1) & 0x3FFFFF;
+  }
 }
