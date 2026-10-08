@@ -140,6 +140,50 @@ class HummingbirdPathRawTest {
     assertEquals(1, crossover.getCrossOver(2));
   }
 
+  /**
+   * The interfaces the router derives Ak from, in travel direction. The path prints as {@code
+   * [1-ff00:0:112 1>2 1-ff00:0:110 1>41 1-ff00:0:111]}, and 0 is the side of the end host. AS 110
+   * has two hop fields, and at the crossover both get the pair from 110's ingress to its egress.
+   */
+  @Test
+  void testFlyoverInterfaces() {
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(pathBytes));
+    // AS 112: stored (1, 0); segment 0 runs against construction direction, so swapped.
+    assertEquals(0, path.getFlyoverIngress(0));
+    assertEquals(1, path.getFlyoverEgress(0));
+    // AS 110, last hop field of segment 0: its own ingress 2, the egress 1 of hop field 2.
+    assertEquals(2, path.getFlyoverIngress(1));
+    assertEquals(1, path.getFlyoverEgress(1));
+    // AS 110, first hop field of segment 1: the ingress 2 of hop field 1, its own egress 1.
+    assertEquals(2, path.getFlyoverIngress(2));
+    assertEquals(1, path.getFlyoverEgress(2));
+    // AS 111: stored (41, 0); segment 1 runs in construction direction, so as stored.
+    assertEquals(41, path.getFlyoverIngress(3));
+    assertEquals(0, path.getFlyoverEgress(3));
+
+    assertThrows(IllegalArgumentException.class, () -> path.getFlyoverIngress(4));
+  }
+
+  /**
+   * A peering link is no crossover, so every hop field keeps its own interfaces. With the crossover
+   * rule, hop fields 0 and 1 would both get (0, 0). Hop field 2 is the one that the reference's
+   * HummingbirdFlyoverPeeringDownstream reserves, with Ak over (121, 151).
+   */
+  @Test
+  void testFlyoverInterfacesAtPeering() {
+    HummingbirdPathRaw path =
+        HummingbirdPathRaw.create(
+            ByteBuffer.wrap(HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM));
+    assertEquals(0, path.getFlyoverIngress(0)); // stored (211, 0), against construction direction
+    assertEquals(211, path.getFlyoverEgress(0));
+    assertEquals(121, path.getFlyoverIngress(1)); // stored (121, 0), in construction direction
+    assertEquals(0, path.getFlyoverEgress(1));
+    assertEquals(121, path.getFlyoverIngress(2));
+    assertEquals(151, path.getFlyoverEgress(2));
+    assertEquals(511, path.getFlyoverIngress(3));
+    assertEquals(0, path.getFlyoverEgress(3));
+  }
+
   /** An empty raw path is not an error; PathRawParser treats it the same way. */
   @Test
   void testEmptyPath() {
