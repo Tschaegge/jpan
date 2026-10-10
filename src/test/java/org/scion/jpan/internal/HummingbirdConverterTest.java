@@ -215,6 +215,12 @@ public class HummingbirdConverterTest {
     assertEquals(3, r.getCurrHF());
   }
 
+  /** A destination in the local AS has an empty path, and so has the reply. */
+  @Test
+  void testReverseEmptyPath() {
+    assertArrayEquals(new byte[0], HummingbirdPathConverter.reverse(new byte[0]));
+  }
+
   /** Reversing twice gives the input back, only without its flyovers. */
   @Test
   void testReverseTwice() {

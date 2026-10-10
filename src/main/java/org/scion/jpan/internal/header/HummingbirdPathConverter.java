@@ -185,7 +185,7 @@ public class HummingbirdPathConverter {
    * fields and hop fields in reverse order, ConsDir flipped.
    */
   public static byte[] reverse(byte[] input) {
-    if (input.length == 0){
+    if (input.length == 0) {
       return input.clone();
     }
     byte[] path = removeFlyovers(input);
