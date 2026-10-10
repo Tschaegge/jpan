@@ -179,4 +179,44 @@ public class HummingbirdPathConverter {
     }
     return word;
   }
+
+  /**
+   * Reverses a Hummingbird path for the reply. Reverse (Appendix A.8): flyovers removed, info
+   * fields and hop fields in reverse order, ConsDir flipped.
+   */
+  public static byte[] reverse(byte[] input) {
+    if (input.length == 0){
+      return input.clone();
+    }
+    byte[] path = removeFlyovers(input);
+    HummingbirdPathRaw p = HummingbirdPathRaw.create(ByteBuffer.wrap(path));
+    int numInfoFields = p.getSegmentCount();
+    int numHopFields = p.getHopFieldCount();
+    ByteBuffer bb = ByteBuffer.allocate(path.length);
+
+    int[] segLen = new int[3];
+    for (int seg = 0; seg < numInfoFields; seg++) {
+      // reverse order, works for 1 to 3 segments
+      segLen[seg] = p.getSegLen(numInfoFields - 1 - seg);
+    }
+    int numLines = numHopFields * HummingbirdPathRaw.HOP_LINES; // all hop fields are 3 lines now
+    // 0 when the path is reversed at its destination
+    int currINF = numInfoFields - p.getCurrINF() - 1;
+    int currHF = numLines - p.getCurrHF() - HummingbirdPathRaw.HOP_LINES;
+    bb.putInt(metaHeaderFirstWord(currINF, currHF, segLen));
+    bb.put(path, 4, 8); // BaseTS and HighResTS
+
+    // Info fields in reverse order, each with ConsDir flipped.
+    for (int i = numInfoFields - 1; i >= 0; i--) {
+      int src = HummingbirdPathRaw.META_LEN + i * INFO_FIELD_LEN;
+      bb.put((byte) (path[src] ^ 1));
+      bb.put(path, src + 1, INFO_FIELD_LEN - 1);
+    }
+
+    // Hop fields in reverse order, their bytes (and MACs) unchanged.
+    for (int i = numHopFields - 1; i >= 0; i--) {
+      bb.put(path, p.getHopFieldOffset(i), HOP_FIELD_LEN);
+    }
+    return bb.array();
+  }
 }

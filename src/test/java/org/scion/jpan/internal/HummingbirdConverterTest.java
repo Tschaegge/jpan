@@ -156,4 +156,80 @@ public class HummingbirdConverterTest {
         IllegalArgumentException.class,
         () -> HummingbirdPathConverter.convertFromScion(scionPathtiny, 0, 0, 1 << 22));
   }
+
+  // What the reference's Decoded.Reverse (scion-hummingbird decoded.go:160-197) makes of the same
+  // input bytes, computed with a small Go program. Meta header, info fields, then the hop fields.
+  private static final String REVERSED_112_111 =
+      "424183006a7f08e712000004"
+          + "0000e85c6a7f08b9"
+          + "0100bbfe6a7f08be"
+          + "003f00290000a9be1d3a07e6"
+          + "003f00000001c47cf0e2eb51"
+          + "003f000000025d7b73e0d131"
+          + "003f00010000e3fcf2dbcd93";
+  private static final String REVERSED_PEERING =
+      "00c241806a8ff6917d000000"
+          + "020002226a8ff691"
+          + "030001116a8ff691"
+          + "000001ff0000000000000000"
+          + "000000790097580df0563dc0"
+          + "000000790000000000000000"
+          + "000000d30000000000000000";
+
+  /**
+   * The reply path to 112 -> 110 -> 111: flyovers gone, AS 111's hop field first, ConsDir flipped
+   * in both info fields. The bytes must equal what the reference makes of the same input.
+   */
+  @Test
+  void testReverse() {
+    byte[] out = HummingbirdPathConverter.reverse(hbirdPath);
+    assertArrayEquals(fromHex(REVERSED_112_111), out);
+
+    HummingbirdPathRaw r = HummingbirdPathRaw.create(ByteBuffer.wrap(out));
+    assertEquals(76, r.length()); // 100 bytes minus 8 for each of the three flyovers
+    assertEquals(6, r.getSegLen(0));
+    assertEquals(6, r.getSegLen(1));
+    assertEquals(1, r.getCurrINF()); // the input is a sender's path, CurrINF 0 and CurrHF 0
+    assertEquals(9, r.getCurrHF());
+    assertFalse(r.getInfoField(0).hasConstructionDirection()); // was segment 1, ConsDir 1
+    assertTrue(r.getInfoField(1).hasConstructionDirection());
+    assertEquals(41, r.getHopField(0).getIngress()); // AS 111 comes first now
+    assertEquals(1, r.getHopField(3).getIngress()); // AS 112 last
+    for (int i = 0; i < r.getHopFieldCount(); i++) {
+      assertFalse(r.getHopField(i).isFlyover(), "hop " + i);
+    }
+  }
+
+  /** Segments of different lengths: 3 and 9 lines become 9 and 3. On tiny4 both are 6. */
+  @Test
+  void testReverseSwapsSegmentLengths() {
+    byte[] out =
+        HummingbirdPathConverter.reverse(
+            HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM);
+    assertArrayEquals(fromHex(REVERSED_PEERING), out);
+
+    HummingbirdPathRaw r = HummingbirdPathRaw.create(ByteBuffer.wrap(out));
+    assertEquals(9, r.getSegLen(0));
+    assertEquals(3, r.getSegLen(1));
+    assertEquals(0, r.getCurrINF()); // the input has CurrINF 1 and CurrHF 6
+    assertEquals(3, r.getCurrHF());
+  }
+
+  /** Reversing twice gives the input back, only without its flyovers. */
+  @Test
+  void testReverseTwice() {
+    for (byte[] path :
+        new byte[][] {hbirdPath, HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM}) {
+      byte[] twice = HummingbirdPathConverter.reverse(HummingbirdPathConverter.reverse(path));
+      assertArrayEquals(HummingbirdPathConverter.removeFlyovers(path), twice);
+    }
+  }
+
+  private static byte[] fromHex(String hex) {
+    byte[] out = new byte[hex.length() / 2];
+    for (int i = 0; i < out.length; i++) {
+      out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+    }
+    return out;
+  }
 }
