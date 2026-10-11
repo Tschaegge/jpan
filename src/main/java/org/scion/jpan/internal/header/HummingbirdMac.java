@@ -41,6 +41,7 @@ public final class HummingbirdMac {
 
   private final Cipher akCipher;
   private final byte[] in = new byte[BLOCK_LEN]; // the MAC input, refilled for every packet
+  private final ByteBuffer inBuf = ByteBuffer.wrap(in); // a view on in, made once
   private final byte[] vk = new byte[BLOCK_LEN]; // the flyover MAC, overwritten by every call
 
   /**
@@ -84,13 +85,12 @@ public final class HummingbirdMac {
     checkWidth("pktLen", pktLen, 16);
     checkWidth("resStartTime", resStartTime, 16);
 
-    ByteBuffer bb = ByteBuffer.wrap(in);
-    bb.putLong(dstIsdAs);
-    bb.putShort((short) pktLen);
-    bb.putShort((short) resStartTime);
-    bb.putInt(highResTs);
+    inBuf.clear(); // back to position 0, the 16 bytes are overwritten below
+    inBuf.putLong(dstIsdAs);
+    inBuf.putShort((short) pktLen);
+    inBuf.putShort((short) resStartTime);
+    inBuf.putInt(highResTs);
     try {
-      // Two arrays: with one, the JDK would first copy the input to encrypt it in place.
       akCipher.doFinal(in, 0, BLOCK_LEN, vk, 0);
       return vk;
     } catch (GeneralSecurityException e) {

@@ -20,23 +20,29 @@ import java.util.Arrays;
 import org.scion.jpan.internal.header.HummingbirdMac;
 
 /**
- * One Hummingbird reservation as the endhost receives it from the issuing AS: which interface pair
- * it covers, what was reserved, when it is valid, and the authentication key Ak that signs every
- * packet sent over it.
- *
- * <p>Immutable. {@code ingress} and {@code egress} are in traversal direction, the direction the
- * packet travels, which is what the router derives Ak from.
+ * A bandwidth reservation at one AS, with the key Ak that the AS issued for it. The ingress and
+ * egress must be the interfaces the packet really uses at that AS, otherwise the router drops it.
  */
 public final class Flyover {
 
-  private final int ingress; // 16 bits, 0 at the source AS
-  private final int egress; // 16 bits, 0 at the destination AS
-  private final int resID; // 22 bits
-  private final int bw; // 10 bits, the encoded bandwidth
-  private final long startTime; // absolute Unix seconds; the router requires startTime < now
-  private final int duration; // 16 bits, seconds
-  private final byte[] ak; // 16 bytes, AES-128 key
+  private final int ingress;
+  private final int egress;
+  private final int resID;
+  private final int bw;
+  private final long startTime;
+  private final int duration;
+  private final byte[] ak;
 
+  /**
+   * @param ingress interface where the packet enters the AS, in travel direction, 0 at the source
+   * @param egress interface where the packet leaves the AS, in travel direction, 0 at the
+   *     destination
+   * @param resID 22-bit reservation ID, unique per interface pair while the reservation is valid
+   * @param bw 10-bit bandwidth codepoint, not kbps
+   * @param startTime absolute Unix seconds, must lie in the past or the router drops the packets
+   * @param duration length of the reservation in seconds
+   * @param ak 16-byte key the AS issued for this reservation
+   */
   public Flyover(
       int ingress, int egress, int resID, int bw, long startTime, int duration, byte[] ak) {
     checkWidth("ingress", ingress, 16);
@@ -83,12 +89,10 @@ public final class Flyover {
     return duration;
   }
 
-  /** Returns a copy of the authentication key. */
   public byte[] getAk() {
     return Arrays.copyOf(ak, ak.length);
   }
 
-  /** Never prints the key. */
   @Override
   public String toString() {
     return "Flyover{ingress="

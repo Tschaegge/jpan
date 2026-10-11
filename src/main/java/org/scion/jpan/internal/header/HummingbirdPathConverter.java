@@ -40,26 +40,13 @@ public class HummingbirdPathConverter {
    *
    * @param baseTs seconds of the packet timestamp, a field SCION does not have
    * @param millis sub-second part of the same instant, 0..999
-   * @param counter 22-bit per-packet counter. Together with millis it forms HighResTS
+   * @param counter 22-bit per-packet counter; together with millis it forms HighResTS
    * @throws IllegalArgumentException if millis does not fit 10 bits or counter 22 bits
    */
   public static byte[] convertFromScion(byte[] scionPath, long baseTs, int millis, int counter) {
-    ByteBuffer out = ByteBuffer.allocate(scionPath.length + 8); // meta header grows from 4 to 12
-    convertFromScion(ByteBuffer.wrap(scionPath), out, baseTs, millis, counter);
-    return out.array();
-  }
-
-  /**
-   * Same as {@link #convertFromScion(byte[], long, int, int)}, but on buffers: reads the SCION path
-   * from {@code scionPath} (position to limit, the position does not move) and writes the
-   * Hummingbird path at the position of {@code out}, which moves behind it.
-   */
-  public static void convertFromScion(
-      ByteBuffer scionPath, ByteBuffer out, long baseTs, int millis, int counter) {
-    // HighResTS is millis << 22 | counter: a counter of 22 bits or more would run into the millis.
     checkWidth("millis", millis, 10);
     checkWidth("counter", counter, 22);
-    int i0 = scionPath.duplicate().getInt();
+    int i0 = ByteBuffer.wrap(scionPath).getInt();
 
     // SCION counts hop fields, Hummingbird counts 4-byte lines. A hop field is 3 lines.
     // Reading the SCION path meta header and converting it to lines
@@ -70,14 +57,14 @@ public class HummingbirdPathConverter {
     segLen[1] = readInt(i0, 20, 6) * HummingbirdPathRaw.HOP_LINES;
     segLen[2] = readInt(i0, 26, 6) * HummingbirdPathRaw.HOP_LINES;
 
-    out.putInt(metaHeaderFirstWord(currINF, currHF, segLen));
-    out.putInt(ByteUtil.toInt(baseTs));
-    out.putInt((millis << 22) | counter);
-
-    // Info fields and hop fields: everything behind the 4-byte SCION meta header, unchanged
-    ByteBuffer rest = scionPath.duplicate();
-    rest.position(scionPath.position() + 4);
-    out.put(rest);
+    // Converting it to the Hummingbird path meta header
+    byte[] out = new byte[scionPath.length + 8]; // meta header grows from 4 to 12 bytes
+    ByteBuffer bb = ByteBuffer.wrap(out);
+    bb.putInt(metaHeaderFirstWord(currINF, currHF, segLen));
+    bb.putInt(ByteUtil.toInt(baseTs));
+    bb.putInt((millis << 22) | counter);
+    bb.put(scionPath, 4, scionPath.length - 4); // info fields and hop fields
+    return out;
   }
 
   /** Strips every flyover from a Hummingbird path mainly to prepare for reverse direction */
@@ -199,7 +186,7 @@ public class HummingbirdPathConverter {
       // reverse order, works for 1 to 3 segments
       segLen[seg] = p.getSegLen(numInfoFields - 1 - seg);
     }
-    int numLines = numHopFields * HummingbirdPathRaw.HOP_LINES; // all hop fields are 3 lines now
+    int numLines = numHopFields * HummingbirdPathRaw.HOP_LINES;
     // 0 when the path is reversed at its destination
     int currINF = numInfoFields - p.getCurrINF() - 1;
     int currHF = numLines - p.getCurrHF() - HummingbirdPathRaw.HOP_LINES;

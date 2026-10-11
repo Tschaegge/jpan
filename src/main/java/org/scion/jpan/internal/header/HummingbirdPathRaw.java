@@ -273,27 +273,22 @@ public class HummingbirdPathRaw {
     return highResTsRaw & 0x3FFFFF;
   }
 
-  /**
-   * Ingress of hop field {@code hopIdx} as the router uses it for Ak: in travel direction, and at a
-   * crossover from the ingress of the incoming hop (reference: getFlyoverInterfaces in
-   * router/dataplane_hbird.go).
-   */
+  /** Ingress of hop {@code hopIdx} in travel direction. At a crossover it is the previous hop's. */
   public int getFlyoverIngress(int hopIdx) {
     if (getCrossOver(hopIdx) == 1) {
-      return travelIngress(hopIdx - 1); // first hop after a crossover: the previous hop's ingress
+      return travelIngress(hopIdx - 1);
     }
     return travelIngress(hopIdx);
   }
 
-  /** Egress of hop field {@code hopIdx} for Ak; at a crossover the egress of the outgoing hop. */
+  /** Egress of hop {@code hopIdx} in travel direction. At a crossover it is the next hop's. */
   public int getFlyoverEgress(int hopIdx) {
     if (getCrossOver(hopIdx) == -1) {
-      return travelEgress(hopIdx + 1); // last hop before a crossover: the next hop's egress
+      return travelEgress(hopIdx + 1);
     }
     return travelEgress(hopIdx);
   }
 
-  /** Hop fields store the construction direction; swap if the segment is traversed against it. */
   private int travelIngress(int hopIdx) {
     FlyoverHopField hop = getHopField(hopIdx);
     boolean consDir = getInfoField(getSegmentIndex(hopIdx)).hasConstructionDirection();

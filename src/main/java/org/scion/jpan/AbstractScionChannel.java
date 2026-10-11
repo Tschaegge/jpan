@@ -784,7 +784,8 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
           path.getRemoteAddress().getAddress(),
           hdrTypeId,
           cfgTrafficClass);
-      // The whole packet: common and address header (written), path, and payload.
+
+      // PacketLength is needed for MAC at ReservedPaths
       int packetLength = buffer.position() + rawPath.length + payloadLength;
       path.writePath(buffer, packetLength);
     }

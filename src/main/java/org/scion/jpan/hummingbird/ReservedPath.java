@@ -27,12 +27,12 @@ import org.scion.jpan.internal.header.HummingbirdPathRaw;
 public class ReservedPath extends Path {
 
   private final Path scionPath;
-  private int counter = 0; // low 22 bits of HighResTS, one step per packet
+  private int counter = 0;
   private final Flyover[] flyovers;
-  private final HummingbirdMac[] macs; // one per flyover, same index; null where there is none
+  private final HummingbirdMac[] macs; // one per flyover
+  private final int[] hopOffsets; // where each flyover's hop field starts in the template
 
   public ReservedPath(Path scionPath, Flyover[] flyovers) {
-
     super(
         toHummingbird(scionPath, flyovers),
         scionPath.getFirstHopAddress(),
@@ -43,15 +43,15 @@ public class ReservedPath extends Path {
     this.scionPath = scionPath;
     this.flyovers = flyovers.clone();
     this.macs = new HummingbirdMac[flyovers.length];
+    this.hopOffsets = new int[flyovers.length];
+    // The template never changes, so neither do the positions of its hop fields.
+    HummingbirdPathRaw template = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
     for (int i = 0; i < flyovers.length; i++) {
       if (flyovers[i] != null) {
         macs[i] = new HummingbirdMac(flyovers[i].getAk());
+        hopOffsets[i] = template.getHopFieldOffset(i);
       }
     }
-  }
-
-  public ReservedPath(Path scionPath) {
-    this(scionPath, new Flyover[0]); // no flyovers
   }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
@@ -99,13 +99,12 @@ public class ReservedPath extends Path {
     buffer.putInt(start + 4, baseTs);
     buffer.putInt(start + 8, highResTs);
 
-    HummingbirdPathRaw raw = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
     for (int i = 0; i < flyovers.length; i++) {
       Flyover f = flyovers[i];
       if (f == null) {
         continue; // no reservation at this hop
       }
-      int hop = raw.getHopFieldOffset(i);
+      int hop = hopOffsets[i];
 
       int resStartOffset = (int) (now / 1000 - f.getStartTime());
       buffer.putShort(start + hop + 16, (short) resStartOffset);
