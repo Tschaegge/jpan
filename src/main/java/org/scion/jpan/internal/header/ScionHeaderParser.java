@@ -119,7 +119,12 @@ public class ScionHeaderParser {
     if (path.length > 0) {
       // raw path may be empty for local AS
       data.get(path);
-      reversePathInPlace(ByteBuffer.wrap(path));
+      int pathType = ByteUtil.readInt(i2, 0, 8);
+      if (pathType == 5) {
+        path = HummingbirdPathConverter.reverse(path);
+      } else {
+        reversePathInPlace(ByteBuffer.wrap(path));
+      }
     }
 
     // get remote port from UDP or SCMP payload

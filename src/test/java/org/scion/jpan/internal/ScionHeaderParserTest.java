@@ -26,6 +26,7 @@ import org.scion.jpan.demo.inspector.PathHeaderScion;
 import org.scion.jpan.demo.inspector.ScionHeader;
 import org.scion.jpan.demo.inspector.ScionPacketInspector;
 import org.scion.jpan.demo.inspector.ScmpHeader;
+import org.scion.jpan.internal.header.HummingbirdPathConverter;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.header.ScmpParser;
 import org.scion.jpan.internal.util.ByteUtil;
@@ -218,6 +219,22 @@ class ScionHeaderParserTest {
       ByteBuffer data = createScmpResponse(Scmp.TypeCode.TYPE_200);
       assertNull(ScionHeaderParser.validate(data)); // Works!
     }
+  }
+
+  /** The reply to a Hummingbird packet gets the received path reversed the Hummingbird way. */
+  @Test
+  void testResponsePathHummingbird() {
+    // The header captured from the Go prototype, plus the UDP payload it announces
+    byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+    ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+    data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+    data.rewind();
+
+    InetSocketAddress firstHop = new InetSocketAddress("127.0.0.1", 31000);
+    ResponsePath reply = ScionHeaderParser.extractResponsePath(data, firstHop);
+    byte[] received = HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111; // bytes 36 to 135 above
+    assertArrayEquals(HummingbirdPathConverter.reverse(received), reply.getRawPath());
+    assertEquals(40000, reply.getRemotePort()); // the sender's port becomes the reply's destination
   }
 
   /** A packet with a path may be SCION (1) or Hummingbird (5), and no other path type. */
