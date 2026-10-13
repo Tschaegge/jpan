@@ -352,9 +352,9 @@ public class ScionHeaderParser {
           + (hdrLenBytes + payLoadLen);
     }
     int pathType = ByteUtil.readInt(i2, 0, 8);
-    if (pathType != 1 && pathType != 0) {
+    if (pathType != 1 && pathType != 0 && pathType != 5) {
       // Validation against path length happens further down.
-      return PRE + "Invalid path type: expected 0 or 1, got " + pathType;
+      return PRE + "Invalid path type: expected 0, 1 or 5, got " + pathType;
     }
     int dt = ByteUtil.readInt(i2, 8, 2);
     int dl = ByteUtil.readInt(i2, 10, 2);
@@ -414,7 +414,7 @@ public class ScionHeaderParser {
     if (path.length == 0 && pathType != 0) {
       return PRE + "Path is empty but path type is: " + pathType;
     }
-    if (path.length > 0 && pathType != 1) {
+    if (path.length > 0 && pathType != 1 && pathType != 5) {
       return PRE + "Path is not empty but path type is: " + pathType;
     }
     // TODO validate path

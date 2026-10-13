@@ -30,6 +30,7 @@ import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.header.ScmpParser;
 import org.scion.jpan.internal.util.ByteUtil;
 import org.scion.jpan.testutil.ExamplePacket;
+import org.scion.jpan.testutil.HummingbirdExamplePacket;
 
 class ScionHeaderParserTest {
 
@@ -216,6 +217,30 @@ class ScionHeaderParserTest {
       // Custom SCMP INFO: 200
       ByteBuffer data = createScmpResponse(Scmp.TypeCode.TYPE_200);
       assertNull(ScionHeaderParser.validate(data)); // Works!
+    }
+  }
+
+  /** A packet with a path may be SCION (1) or Hummingbird (5), and no other path type. */
+  @Test
+  void validatePathType() {
+    {
+      // Hummingbird: the header captured from the Go prototype, plus the UDP payload it announces
+      byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+      ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+      data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+      data.rewind();
+      assertNull(ScionHeaderParser.validate(data)); // Works!
+      data.rewind();
+      data.put(8, (byte) 3); // EPIC, which JPAN does not implement
+      assertNotNull(ScionHeaderParser.validate(data));
+    }
+    {
+      // SCION is still accepted, but not with the path type of an empty path.
+      ByteBuffer data = ByteBuffer.wrap(packetBytes.clone());
+      assertNull(ScionHeaderParser.validate(data)); // Works!
+      data.rewind();
+      data.put(8, (byte) 0);
+      assertNotNull(ScionHeaderParser.validate(data));
     }
   }
 
