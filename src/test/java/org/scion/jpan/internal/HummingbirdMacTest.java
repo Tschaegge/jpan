@@ -56,12 +56,16 @@ class HummingbirdMacTest {
   void testAggregateMac() {
     // The SCION MAC (any 6 bytes) sits at position 2; the bytes around it must not change.
     ByteBuffer packet = ByteBuffer.wrap(fromHex("aaaa" + "c47cf0e2eb51" + "bbbb"));
-    HummingbirdMac.aggregateMac(packet, 2, EXPECTED_VK);
+    HummingbirdMac mac = new HummingbirdMac(AK);
+    long dstIsdAs = ScionUtil.parseIA("1-ff00:0:110");
+    int highResTs = (500 << 22) | 7;
+    // The inputs of testFlyoverMac, so Vk is EXPECTED_VK.
+    mac.aggregateMac(packet, 2, dstIsdAs, 1000, 0x0102, highResTs);
     assertArrayEquals(fromHex("aaaa" + "9dc84a34726b" + "bbbb"), packet.array()); // c4^59, ...
     assertEquals(0, packet.position()); // writes at fixed positions, the position does not move
 
     // The router XORs Vk in once more to get the SCION MAC back.
-    HummingbirdMac.aggregateMac(packet, 2, EXPECTED_VK);
+    mac.aggregateMac(packet, 2, dstIsdAs, 1000, 0x0102, highResTs);
     assertArrayEquals(fromHex("aaaa" + "c47cf0e2eb51" + "bbbb"), packet.array());
   }
 

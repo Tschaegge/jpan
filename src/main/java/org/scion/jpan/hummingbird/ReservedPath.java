@@ -109,8 +109,9 @@ public class ReservedPath extends Path {
       int resStartOffset = (int) (now / 1000 - f.getStartTime());
       buffer.putShort(start + hop + 16, (short) resStartOffset);
 
-      byte[] vk = macs[i].flyoverMac(getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
-      HummingbirdMac.aggregateMac(buffer, start + hop + 6, vk); // the SCION MAC is already there
+      // The SCION MAC is already in the buffer, the aggregated MAC replaces it.
+      macs[i].aggregateMac(
+          buffer, start + hop + 6, getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
     }
 
     counter = (counter + 1) & 0x3FFFFF;
