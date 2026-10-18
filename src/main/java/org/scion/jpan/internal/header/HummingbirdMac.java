@@ -99,12 +99,14 @@ public final class HummingbirdMac {
   }
 
   /**
-   * XORs the first six bytes of the flyover MAC into the SCION MAC at {@code macPos} of the packet,
-   * in place: the six bytes there go in as the SCION MAC and come out as the aggregated MAC.
+   * Computes the flyover MAC of one packet and XORs its first six bytes into the SCION MAC at
+   * {@code macPos} of the packet, in place.
    */
-  public static void aggregateMac(ByteBuffer packet, int macPos, byte[] flyoverMac) {
+  public void aggregateMac(
+      ByteBuffer packet, int macPos, long dstIsdAs, int pktLen, int resStartTime, int highResTs) {
+    byte[] mac = flyoverMac(dstIsdAs, pktLen, resStartTime, highResTs);
     for (int i = 0; i < MAC_LEN; i++) {
-      packet.put(macPos + i, (byte) (packet.get(macPos + i) ^ flyoverMac[i]));
+      packet.put(macPos + i, (byte) (packet.get(macPos + i) ^ mac[i]));
     }
   }
 }

@@ -33,10 +33,11 @@ import org.scion.jpan.testutil.ExamplePacket;
 import org.scion.jpan.testutil.MockDatagramChannel;
 
 /**
- * A path decides its own path type and writes its own bytes for every packet. A Hummingbird path
- * needs both: type 5, and MACs that cover the length of the packet.
+ * A subclass of Path can override getPathType() and writePath(): the channel takes the path type
+ * from the path and lets it write its own bytes into every packet. A Hummingbird path needs both,
+ * type 5 and MACs that cover the length of the packet.
  */
-class PathHookTest {
+class PathSubclassTest {
 
   private static final String TOPO_112 = "topologies/tiny4/ASff00_0_112/topology.json";
 
