@@ -14,6 +14,7 @@
 
 package org.scion.jpan;
 
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.*;
@@ -28,6 +29,7 @@ import org.scion.jpan.internal.*;
 import org.scion.jpan.internal.bootstrap.LocalAS;
 import org.scion.jpan.internal.header.ExtensionHeader;
 import org.scion.jpan.internal.header.HeaderConstants;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.internal.header.PathRawParserLight;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.header.ScmpParser;
@@ -486,10 +488,17 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       // If we don't have a path (local AS) we need to use the underlay IP address.
       if (pathPos > 0) {
         buffer.position(pathPos);
-        int hopCount = PathRawParserLight.extractHopCount(buffer);
-        int[] interfaceIds = PathRawParserLight.extractHopFieldInterfaceIDs(buffer, hopCount - 1);
+        int interfaceId;
+        if (ByteUtil.toUnsigned(buffer.get(8)) == 5) {
+          HummingbirdPathRaw path = HummingbirdPathRaw.create(buffer);
+          HummingbirdPathRaw.FlyoverHopField last = path.getHopField(path.getHopFieldCount() - 1);
+          interfaceId = last.getIngress() == 0 ? last.getEgress() : last.getIngress();
+        } else {
+          int hopCount = PathRawParserLight.extractHopCount(buffer);
+          int[] interfaceIds = PathRawParserLight.extractHopFieldInterfaceIDs(buffer, hopCount - 1);
+          interfaceId = interfaceIds[0] == 0 ? interfaceIds[1] : interfaceIds[0];
+        }
         buffer.position(oldPos);
-        int interfaceId = interfaceIds[0] == 0 ? interfaceIds[1] : interfaceIds[0];
         return service.getBorderRouterAddress(interfaceId);
       }
     }
