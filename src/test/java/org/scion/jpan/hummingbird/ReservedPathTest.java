@@ -30,7 +30,8 @@ import org.scion.jpan.testutil.ExamplePacket;
 /**
  * Checks the path bytes a ReservedPath writes for each packet: fresh timestamps and, for a flyover,
  * its fields and the aggregated MAC. That the channel hands writePath the right packet length is
- * tested in PathHookTest, and the same with real routers is {@code make live} in hbird-conformance.
+ * tested in PathSubclassTest, and the same with real routers is {@code make live} in
+ * hbird-conformance.
  */
 class ReservedPathTest {
 
