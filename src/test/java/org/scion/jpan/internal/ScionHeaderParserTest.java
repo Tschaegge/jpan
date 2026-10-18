@@ -221,7 +221,10 @@ class ScionHeaderParserTest {
     }
   }
 
-  /** The reply to a Hummingbird packet gets the received path reversed the Hummingbird way. */
+  /**
+   * The reply to a Hummingbird packet gets the received path reversed the Hummingbird way, and
+   * keeps path type 5, also in a copy for another destination.
+   */
   @Test
   void testResponsePathHummingbird() {
     // The header captured from the Go prototype, plus the UDP payload it announces
@@ -235,6 +238,13 @@ class ScionHeaderParserTest {
     byte[] received = HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111; // bytes 36 to 135 above
     assertArrayEquals(HummingbirdPathConverter.reverse(received), reply.getRawPath());
     assertEquals(40000, reply.getRemotePort()); // the sender's port becomes the reply's destination
+    assertEquals(5, reply.getPathType());
+    assertEquals(5, reply.copy(reply.getRemoteAddress(), 40001).getPathType());
+
+    // A SCION packet still gets a SCION reply.
+    ResponsePath scionReply =
+        ScionHeaderParser.extractResponsePath(ByteBuffer.wrap(packetBytes), firstHop);
+    assertEquals(1, scionReply.getPathType());
   }
 
   /** A packet with a path may be SCION (1) or Hummingbird (5), and no other path type. */

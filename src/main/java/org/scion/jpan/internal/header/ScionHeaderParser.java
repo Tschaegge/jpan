@@ -20,6 +20,7 @@ import org.scion.jpan.Constants;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.ScionRuntimeException;
 import org.scion.jpan.Scmp;
+import org.scion.jpan.hummingbird.HummingbirdResponsePath;
 import org.scion.jpan.internal.util.ByteUtil;
 
 /** Utility methods for reading and writing the Common Header and Address Header. */
@@ -115,11 +116,11 @@ public class ScionHeaderParser {
     }
 
     // raw path
+    int pathType = ByteUtil.readInt(i2, 0, 8);
     byte[] path = new byte[hdrLenBytes - data.position()];
     if (path.length > 0) {
       // raw path may be empty for local AS
       data.get(path);
-      int pathType = ByteUtil.readInt(i2, 0, 8);
       if (pathType == 5) {
         path = HummingbirdPathConverter.reverse(path);
       } else {
@@ -135,6 +136,10 @@ public class ScionHeaderParser {
     // rewind to original offset
     data.position(start);
     // Swap src and dst.
+    if (pathType == 5) {
+      return new HummingbirdResponsePath(
+          path, dstIsdAs, dstIP, dstPort, srcIsdAs, srcIP, srcPort, firstHopAddress);
+    }
     return ResponsePath.create(
         path, dstIsdAs, dstIP, dstPort, srcIsdAs, srcIP, srcPort, firstHopAddress);
   }
