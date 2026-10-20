@@ -20,17 +20,12 @@ import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
 import org.scion.jpan.RequestPath;
 import org.scion.jpan.internal.header.HeaderConstants;
-import org.scion.jpan.internal.header.HummingbirdMac;
 import org.scion.jpan.internal.header.HummingbirdPathConverter;
-import org.scion.jpan.internal.header.HummingbirdPathRaw;
 
 public class ReservedPath extends Path {
 
   private final Path scionPath;
-  private int counter = 0;
-  private final Flyover[] flyovers;
-  private final HummingbirdMac[] macs; // one per flyover
-  private final int[] hopOffsets; // where each flyover's hop field starts in the template
+  private final FlyoverAuthenticator authenticator;
 
   public ReservedPath(Path scionPath, Flyover[] flyovers) {
     super(
@@ -41,17 +36,7 @@ public class ReservedPath extends Path {
         scionPath.getRemoteAddress(),
         scionPath.getRemotePort());
     this.scionPath = scionPath;
-    this.flyovers = flyovers.clone();
-    this.macs = new HummingbirdMac[flyovers.length];
-    this.hopOffsets = new int[flyovers.length];
-    // The template never changes, so neither do the positions of its hop fields.
-    HummingbirdPathRaw template = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
-    for (int i = 0; i < flyovers.length; i++) {
-      if (flyovers[i] != null) {
-        macs[i] = new HummingbirdMac(flyovers[i].getAk());
-        hopOffsets[i] = template.getHopFieldOffset(i);
-      }
-    }
+    this.authenticator = new FlyoverAuthenticator(getRawPath(), flyovers);
   }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
@@ -62,15 +47,7 @@ public class ReservedPath extends Path {
       throw new IllegalArgumentException("Length of Path can't be 0");
     }
     byte[] path = HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
-    for (int i = 0; i < flyovers.length; i++) {
-      Flyover f = flyovers[i];
-      if (f != null) {
-        path =
-            HummingbirdPathConverter.insertFlyover(
-                path, i, f.getResID(), f.getBw(), 0, f.getDuration());
-      }
-    }
-    return path;
+    return FlyoverAuthenticator.insertFlyovers(path, flyovers);
   }
 
   @Override
@@ -88,33 +65,10 @@ public class ReservedPath extends Path {
     return HeaderConstants.PathTypes.HUMMINGBIRD.code();
   }
 
-  // synchronized: counter and the arrays in macs change with every packet.
   @Override
-  public synchronized void writePath(ByteBuffer buffer, int packetLength) {
+  public void writePath(ByteBuffer buffer, int packetLength) {
     int start = buffer.position();
     buffer.put(getRawPath());
-    long now = System.currentTimeMillis();
-    int baseTs = (int) (now / 1000);
-    int millis = (int) (now % 1000);
-    int highResTs = (millis << 22) | counter;
-    buffer.putInt(start + 4, baseTs);
-    buffer.putInt(start + 8, highResTs);
-
-    for (int i = 0; i < flyovers.length; i++) {
-      Flyover f = flyovers[i];
-      if (f == null) {
-        continue; // no reservation at this hop
-      }
-      int hop = hopOffsets[i];
-
-      int resStartOffset = (int) (now / 1000 - f.getStartTime());
-      buffer.putShort(start + hop + 16, (short) resStartOffset);
-
-      // The SCION MAC is already in the buffer, the aggregated MAC replaces it.
-      macs[i].aggregateMac(
-          buffer, start + hop + 6, getRemoteIsdAs(), packetLength, resStartOffset, highResTs);
-    }
-
-    counter = (counter + 1) & 0x3FFFFF;
+    authenticator.authenticate(buffer, start, getRemoteIsdAs(), packetLength);
   }
 }
