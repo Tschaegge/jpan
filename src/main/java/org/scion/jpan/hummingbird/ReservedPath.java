@@ -88,6 +88,7 @@ public class ReservedPath extends Path {
     return HeaderConstants.PathTypes.HUMMINGBIRD.code();
   }
 
+  // synchronized: counter and the arrays in macs change with every packet.
   @Override
   public synchronized void writePath(ByteBuffer buffer, int packetLength) {
     int start = buffer.position();
