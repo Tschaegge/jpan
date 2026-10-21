@@ -20,6 +20,8 @@ import java.nio.ByteBuffer;
 import org.scion.jpan.Path;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.internal.header.HeaderConstants;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
+import org.scion.jpan.internal.util.ByteUtil;
 
 public class HummingbirdResponsePath extends ResponsePath {
 
@@ -64,6 +66,61 @@ public class HummingbirdResponsePath extends ResponsePath {
       throw new IllegalStateException("This path already has flyovers.");
     }
     return new HummingbirdResponsePath(this, flyovers);
+  }
+
+  /**
+   * Returns this reply with the flyovers the sender offered for it, in the Go prototype's
+   * end-to-end option ReversePath (type 3). This path stays unchanged.
+   *
+   * @param optData the option's data, as BuildReverseReservationExtn in the Go prototype's
+   *     pkg/hummingbird/reverse.go writes it
+   */
+  public HummingbirdResponsePath withReverseReservation(byte[] optData) {
+    Flyover[] flyovers = parseReverseReservation(optData);
+    int hopFields = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath())).getHopFieldCount();
+    if (flyovers.length != hopFields) {
+      throw new IllegalArgumentException(
+          "Reverse reservation for " + flyovers.length + " hop fields, the path has " + hopFields);
+    }
+    return withFlyovers(flyovers);
+  }
+
+  /**
+   * Reads the hops of a serialized Go reservation (serializeHops in pkg/snet/path/hummingbird.go):
+   * the hop count, a bitset of the hops that exist, one of the hops with a flyover, then 12 bytes
+   * per hop plus 28 per flyover. The SCION MACs after that are not needed, the reversed path has
+   * them.
+   */
+  static Flyover[] parseReverseReservation(byte[] optData) {
+    ByteBuffer bb = ByteBuffer.wrap(optData);
+    int hops = ByteUtil.toUnsigned(bb.get());
+    if (hops > 8) {
+      // More hops need bitsets longer than one byte.
+      throw new UnsupportedOperationException("Reverse reservation with " + hops + " hops");
+    }
+    int exists = ByteUtil.toUnsigned(bb.get()); // bit i is hop i
+    int hasFlyover = ByteUtil.toUnsigned(bb.get());
+    Flyover[] flyovers = new Flyover[hops];
+    for (int i = 0; i < hops; i++) {
+      if (((exists >> i) & 1) == 0) {
+        continue;
+      }
+      bb.getLong(); // the AS, not needed
+      int ingress = ByteUtil.toUnsigned(bb.getShort());
+      int egress = ByteUtil.toUnsigned(bb.getShort());
+      if (((hasFlyover >> i) & 1) == 0) {
+        continue;
+      }
+      int resIdBw = bb.getInt();
+      byte[] ak = new byte[16];
+      bb.get(ak);
+      long startTime = bb.getInt() & 0xFFFFFFFFL;
+      int duration = ByteUtil.toUnsigned(bb.getShort());
+      bb.getShort(); // unused: Go reserves 4 bytes for the duration but writes 2
+      flyovers[i] =
+          new Flyover(ingress, egress, resIdBw >>> 10, resIdBw & 0x3FF, startTime, duration, ak);
+    }
+    return flyovers;
   }
 
   @Override
