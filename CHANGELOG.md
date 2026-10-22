@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### TODO for 0.8.0 and beyond
+### TODO for 0.9.0 and beyond
 
 ## TODO
+- Check scion-sdk version flag in http API
+- Performance TODO: When connected: buffer complete SCION header i.o. building it
+  every time. Add cached header to "Path" for send()?
+- Use Builder for LocalAS?
+- Create Builder for ScionService or add SNP props to Channel.Builder???
+- Fix flaky MacOS build
+  [ERROR]   NatMappingTest.testKeepAliveBR_ResetTimerAfterReceive:550 expected: <1> but was: <2>
+
 - After release: update exercise for PathSelector
+- Implement a "Marshaller":
+  Inserts/strips SCION headers from a packet. That can be useful for implementations
+  that cannot use ScionDatagramSocket:
+  - Implementations that use Netty
+  - Implementations that require Java DatagramSocket
+  - ...
+- Support Netty?!?
 
 - Later: ScionService API:
   ISA -> SSA
@@ -161,7 +176,25 @@ TODO
 - Consider using https://github.com/ascopes/protobuf-maven-plugin (more up to date) 
 - Multi-release-jar?
 
-## 0.8.0 - WIP
+## 0.9.0 - WIP
+
+### Added
+
+Nothing yet
+
+## 0.8.1
+
+### Fixed
+
+- Fixed NPE in `ScionDatagramPacket.getSocketAddress()`
+  [#294](https://github.com/scionproto-contrib/jpan/pull/294)
+
+### Fixed
+
+- Post release updates
+  [#293](https://github.com/scionproto-contrib/jpan/pull/293)
+
+## [0.8.0] - 2026-10-16
 
 ### Added
 
@@ -185,6 +218,10 @@ TODO
   [#285](https://github.com/scionproto-contrib/jpan/pull/285)
 - Added `ScionSocketAddress` lookup in `ScionService`.
   [#286](https://github.com/scionproto-contrib/jpan/pull/286)
+- SNAP support
+  [#271](https://github.com/scionproto-contrib/jpan/pull/271)
+- SNAP support for `ScionDatagramSocket`
+  [#290](https://github.com/scionproto-contrib/jpan/pull/290)
 
 ### Fixed
 
@@ -214,6 +251,8 @@ TODO
   [#273](https://github.com/scionproto-contrib/jpan/pull/273)
 - Fixed missing interface ids when querying daemon for border routers.
   [#276](https://github.com/scionproto-contrib/jpan/pull/276)
+- Fixed flaky test: `PathSelectorWithRefreshTest.autoRefresh()`
+  [#288](https://github.com/scionproto-contrib/jpan/pull/288)
 
 ### Changed
 
@@ -223,6 +262,13 @@ TODO
   [#246](https://github.com/scionproto-contrib/jpan/issues/246)
 - Clean up PathMetadata.Builder.
   [#274](https://github.com/scionproto-contrib/jpan/pull/274)
+- **BREAKING CHANGE**: `ScionService.getIsdAses()` now returns a `List`
+  instead of a `Set`. Lists are easier to use and allow rankings.
+  [#289](https://github.com/scionproto-contrib/jpan/pull/289)
+- Cleanup in AbstractScionChannel
+  [#291](https://github.com/scionproto-contrib/jpan/pull/291)
+- Release preparation: Update dependencies
+  [#292](https://github.com/scionproto-contrib/jpan/pull/292)
 
 ### Removed
 
@@ -740,7 +786,8 @@ For example: `Path.getFirstHopAddress()`, `DatagramChannel.setPathPolicy()`
 ### Removed
 - Nothing
 
-[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/scionproto-contrib/jpan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scionproto-contrib/jpan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/scionproto-contrib/jpan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/scionproto-contrib/jpan/compare/v0.5.0...v0.6.0
