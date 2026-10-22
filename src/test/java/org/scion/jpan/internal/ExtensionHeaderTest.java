@@ -64,6 +64,35 @@ class ExtensionHeaderTest {
     assertNull(ext.getOption(3)); // counts as missing
   }
 
+  /** What write() produces, consume() and getOption() read back, for 0 to 3 bytes of padding. */
+  @Test
+  void testWriteAndConsume() {
+    for (int dataLen = 0; dataLen < 4; dataLen++) {
+      byte[] options = new byte[2 + dataLen];
+      options[0] = 3;
+      options[1] = (byte) dataLen;
+      Arrays.fill(options, 2, options.length, (byte) 0x77);
+      ByteBuffer buffer = ByteBuffer.allocate(16);
+      ExtensionHeader.write(buffer, 17, options);
+      assertEquals(ExtensionHeader.length(options), buffer.position());
+      assertEquals(0, buffer.position() % 4);
+
+      buffer.flip();
+      ExtensionHeader ext = ExtensionHeader.consume(buffer);
+      assertEquals(HeaderConstants.HdrTypes.UDP, ext.nextHdr());
+      assertFalse(buffer.hasRemaining()); // the padding belongs to the header
+      assertArrayEquals(Arrays.copyOfRange(options, 2, options.length), ext.getOption(3));
+    }
+  }
+
+  /** The Go extension written again from its option: the same 152 bytes, with Go's padding. */
+  @Test
+  void testWriteLikeGo() {
+    ByteBuffer buffer = ByteBuffer.allocate(GO_EXTENSION.length);
+    ExtensionHeader.write(buffer, 17, Arrays.copyOfRange(GO_EXTENSION, 2, 2 + 2 + 147));
+    assertArrayEquals(GO_EXTENSION, buffer.array());
+  }
+
   private static byte[] fromHex(String hex) {
     byte[] out = new byte[hex.length() / 2];
     for (int i = 0; i < out.length; i++) {

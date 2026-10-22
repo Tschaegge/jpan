@@ -49,6 +49,54 @@ final class FlyoverAuthenticator {
     }
   }
 
+  /**
+   * Checks that the flyovers fit a Hummingbird path without flyovers: one slot per hop field, and
+   * every flyover for the interfaces the routers derive its Ak from.
+   *
+   * @throws IllegalArgumentException if they do not fit
+   */
+  static void checkFlyovers(byte[] rawPath, Flyover[] flyovers) {
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(rawPath));
+    if (flyovers.length != path.getHopFieldCount()) {
+      throw new IllegalArgumentException(
+          flyovers.length
+              + " flyover slots, the path has "
+              + path.getHopFieldCount()
+              + " hop fields");
+    }
+    // An Ak only works for its interfaces. With others the routers drop every packet.
+    for (int i = 0; i < flyovers.length; i++) {
+      Flyover f = flyovers[i];
+      int in = path.getFlyoverIngress(i);
+      int eg = path.getFlyoverEgress(i);
+      if (f != null && (f.getIngress() != in || f.getEgress() != eg)) {
+        throw new IllegalArgumentException(
+            "Flyover "
+                + i
+                + " is for "
+                + f.getIngress()
+                + ">"
+                + f.getEgress()
+                + ", the path has "
+                + in
+                + ">"
+                + eg);
+      }
+    }
+  }
+
+  /** Unix seconds at which the first of the flyovers ends, 0 if there is none. */
+  long expiry() {
+    long expiry = 0;
+    for (Flyover f : flyovers) {
+      if (f != null) {
+        long end = f.getStartTime() + f.getDuration();
+        expiry = expiry == 0 ? end : Math.min(expiry, end);
+      }
+    }
+    return expiry;
+  }
+
   /** Inserts a flyover hop field for every non-null slot of {@code flyovers}. */
   static byte[] insertFlyovers(byte[] path, Flyover[] flyovers) {
     for (int i = 0; i < flyovers.length; i++) {

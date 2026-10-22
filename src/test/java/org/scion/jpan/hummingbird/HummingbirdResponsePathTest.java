@@ -187,6 +187,25 @@ class HummingbirdResponsePathTest {
     assertSame(received, received.withReverseReservation(wrongCount));
   }
 
+  /** A cache keeps a running reservation against later packets without one. */
+  @Test
+  void testKeepsReservation() {
+    long start = 1786710200L;
+    Flyover[] flyovers = new Flyover[4];
+    flyovers[0] = new Flyover(0, 41, 1, 100, start, 60, AK);
+    flyovers[3] = new Flyover(1, 0, 4, 100, start, 30, AK);
+    HummingbirdResponsePath plain = reply();
+    HummingbirdResponsePath reserved = plain.withFlyovers(flyovers);
+    assertEquals(0, plain.getReservationExpiry());
+    assertEquals(start + 30, reserved.getReservationExpiry()); // the first flyover to end
+
+    assertTrue(HummingbirdResponsePath.keepsReservation(reserved, plain, start + 10));
+    // Replaced when it has expired, by a new reservation, or when nothing is cached yet
+    assertFalse(HummingbirdResponsePath.keepsReservation(reserved, plain, start + 30));
+    assertFalse(HummingbirdResponsePath.keepsReservation(reserved, reserved, start + 10));
+    assertFalse(HummingbirdResponsePath.keepsReservation(null, plain, start));
+  }
+
   /** The path bytes written for one packet of the given length. */
   private static byte[] write(HummingbirdResponsePath path, int packetLength) {
     ByteBuffer buffer = ByteBuffer.allocate(path.getRawPath().length);

@@ -21,7 +21,6 @@ import java.nio.ByteBuffer;
 import org.scion.jpan.Path;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.internal.header.HeaderConstants;
-import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.internal.util.ByteUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,6 +59,31 @@ public class HummingbirdResponsePath extends ResponsePath {
     this.authenticator = new FlyoverAuthenticator(getRawPath(), flyovers);
   }
 
+  /** Unix seconds at which the first of this reply's flyovers ends, 0 without flyovers. */
+  public long getReservationExpiry() {
+    return authenticator == null ? 0 : authenticator.expiry();
+  }
+
+  /**
+   * Whether a cache of reply paths should keep {@code cached} instead of replacing it with {@code
+   * received}: when {@code cached} still has a running reservation and {@code received} has none. A
+   * sender offers its reverse reservation with one packet only, as the Go prototype's
+   * HummReplyPather assumes too, so the packets after it must not replace that reply path.
+   *
+   * @param nowSeconds the current time in Unix seconds
+   */
+  public static boolean keepsReservation(Path cached, Path received, long nowSeconds) {
+    if (!(cached instanceof HummingbirdResponsePath)) {
+      return false;
+    }
+    long cachedExpiry = ((HummingbirdResponsePath) cached).getReservationExpiry();
+    long receivedExpiry =
+        received instanceof HummingbirdResponsePath
+            ? ((HummingbirdResponsePath) received).getReservationExpiry()
+            : 0;
+    return cachedExpiry > nowSeconds && receivedExpiry == 0;
+  }
+
   /**
    * Returns this reply with flyovers, to reply with reservations. This path stays unchanged.
    *
@@ -72,33 +96,7 @@ public class HummingbirdResponsePath extends ResponsePath {
     if (authenticator != null) {
       throw new IllegalStateException("This path already has flyovers.");
     }
-    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
-    if (flyovers.length != path.getHopFieldCount()) {
-      throw new IllegalArgumentException(
-          flyovers.length
-              + " flyover slots, the path has "
-              + path.getHopFieldCount()
-              + " hop fields");
-    }
-    // An Ak only works for its interfaces. With others the routers drop every packet.
-    for (int i = 0; i < flyovers.length; i++) {
-      Flyover f = flyovers[i];
-      int in = path.getFlyoverIngress(i);
-      int eg = path.getFlyoverEgress(i);
-      if (f != null && (f.getIngress() != in || f.getEgress() != eg)) {
-        throw new IllegalArgumentException(
-            "Flyover "
-                + i
-                + " is for "
-                + f.getIngress()
-                + ">"
-                + f.getEgress()
-                + ", the path has "
-                + in
-                + ">"
-                + eg);
-      }
-    }
+    FlyoverAuthenticator.checkFlyovers(getRawPath(), flyovers);
     return new HummingbirdResponsePath(this, flyovers);
   }
 

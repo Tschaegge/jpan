@@ -876,21 +876,27 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       }
 
       byte[] rawPath = path.getRawPath();
+      // Options for an end-to-end extension header between the path and hdrTypeId, or null
+      byte[] e2eOptions = path.getEndToEndOptions();
+      int extLength = e2eOptions == null ? 0 : ExtensionHeader.length(e2eOptions);
       ScionHeaderParser.write(
           buffer,
-          payloadLength,
+          extLength + payloadLength,
           rawPath.length,
           path.getPathType(),
           path.getLocalIsdAs(),
           srcAddress.getAddress(),
           path.getRemoteIsdAs(),
           path.getRemoteAddress().getAddress(),
-          hdrTypeId,
+          e2eOptions == null ? hdrTypeId : HeaderConstants.HdrTypes.END_TO_END.code(),
           cfgTrafficClass);
 
       // PacketLength is needed for MAC at ReservedPaths
-      int packetLength = buffer.position() + rawPath.length + payloadLength;
+      int packetLength = buffer.position() + rawPath.length + extLength + payloadLength;
       path.writePath(buffer, packetLength);
+      if (e2eOptions != null) {
+        ExtensionHeader.write(buffer, hdrTypeId, e2eOptions);
+      }
     }
   }
 

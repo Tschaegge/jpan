@@ -44,6 +44,29 @@ public class ExtensionHeader {
     return eh;
   }
 
+  /** The length of an extension header with these options, padded to a multiple of 4 bytes. */
+  public static int length(byte[] options) {
+    return (2 + options.length + 3) / 4 * 4;
+  }
+
+  /**
+   * Writes an extension header: the next header, its length in 4-byte lines minus one, the options
+   * and the padding to a multiple of 4 bytes.
+   */
+  public static void write(ByteBuffer data, int nextHdr, byte[] options) {
+    int len = length(options);
+    data.put((byte) nextHdr);
+    data.put((byte) (len / 4 - 1));
+    data.put(options);
+    int pad = len - 2 - options.length;
+    // As the Go prototype pads (serializeTLVOptionPadding): one byte is a Pad1, more are one PadN
+    if (pad == 1) {
+      data.put((byte) 0);
+    } else if (pad > 1) {
+      data.put((byte) 1).put((byte) (pad - 2)).put(new byte[pad - 2]);
+    }
+  }
+
   @Override
   public String toString() {
     return "ExtensionHeader{"
