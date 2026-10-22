@@ -16,14 +16,19 @@ package org.scion.jpan.hummingbird;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import org.scion.jpan.Path;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.internal.header.HeaderConstants;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.internal.util.ByteUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class HummingbirdResponsePath extends ResponsePath {
+
+  private static final Logger log = LoggerFactory.getLogger(HummingbirdResponsePath.class);
 
   private final FlyoverAuthenticator authenticator; // null: no flyovers
 
@@ -60,29 +65,61 @@ public class HummingbirdResponsePath extends ResponsePath {
    *
    * @param flyovers one slot per hop field in the direction of the reply, so slot 0 is the local
    *     AS. null for a hop without reservation.
+   * @throws IllegalArgumentException if the flyovers do not fit this path: a different number of
+   *     hop fields, or interfaces other than the ones the routers derive the Ak from
    */
   public HummingbirdResponsePath withFlyovers(Flyover[] flyovers) {
     if (authenticator != null) {
       throw new IllegalStateException("This path already has flyovers.");
+    }
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath()));
+    if (flyovers.length != path.getHopFieldCount()) {
+      throw new IllegalArgumentException(
+          flyovers.length
+              + " flyover slots, the path has "
+              + path.getHopFieldCount()
+              + " hop fields");
+    }
+    // An Ak only works for its interfaces. With others the routers drop every packet.
+    for (int i = 0; i < flyovers.length; i++) {
+      Flyover f = flyovers[i];
+      int in = path.getFlyoverIngress(i);
+      int eg = path.getFlyoverEgress(i);
+      if (f != null && (f.getIngress() != in || f.getEgress() != eg)) {
+        throw new IllegalArgumentException(
+            "Flyover "
+                + i
+                + " is for "
+                + f.getIngress()
+                + ">"
+                + f.getEgress()
+                + ", the path has "
+                + in
+                + ">"
+                + eg);
+      }
     }
     return new HummingbirdResponsePath(this, flyovers);
   }
 
   /**
    * Returns this reply with the flyovers the sender offered for it, in the Go prototype's
-   * end-to-end option ReversePath (type 3). This path stays unchanged.
+   * end-to-end option ReversePath (type 3). This path stays unchanged. The data comes from the
+   * network, so unlike {@link #withFlyovers}, data that does not fit this path is not an error: the
+   * reply then goes without flyovers, best effort.
    *
    * @param optData the option's data, as BuildReverseReservationExtn in the Go prototype's
    *     pkg/hummingbird/reverse.go writes it
    */
   public HummingbirdResponsePath withReverseReservation(byte[] optData) {
-    Flyover[] flyovers = parseReverseReservation(optData);
-    int hopFields = HummingbirdPathRaw.create(ByteBuffer.wrap(getRawPath())).getHopFieldCount();
-    if (flyovers.length != hopFields) {
-      throw new IllegalArgumentException(
-          "Reverse reservation for " + flyovers.length + " hop fields, the path has " + hopFields);
+    try {
+      return this.withFlyovers(parseReverseReservation(optData));
+    } catch (IllegalArgumentException
+        | UnsupportedOperationException
+        | BufferUnderflowException e) {
+      log.warn("Could not create a response with reservations");
+      return this;
     }
-    return withFlyovers(flyovers);
   }
 
   /**

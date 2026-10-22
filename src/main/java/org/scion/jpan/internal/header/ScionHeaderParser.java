@@ -41,6 +41,13 @@ public class ScionHeaderParser {
 
     int udpHeaderLength = 8;
     int payLoadStart = hdrLenBytes + udpHeaderLength;
+    int nextHeader = ByteUtil.readInt(i1, 0, 8);
+    if (nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
+        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code()) {
+      // The UDP header follows the extension header, whose second byte is its length in 4-byte
+      // lines minus one.
+      payLoadStart += (ByteUtil.toUnsigned(data.get(hdrLenBytes + 1)) + 1) * 4;
+    }
     int pos = data.position();
     data.position(payLoadStart);
     int maxUserLen = userBuffer.remaining();
@@ -128,10 +135,16 @@ public class ScionHeaderParser {
       }
     }
 
-    // get remote port from UDP or SCMP payload
-    data.position(hdrLenBytes);
-    int srcPort = extractSrcPort(data, hdrLenBytes, hdrType);
-    int dstPort = extractDstPort(data, hdrLenBytes, hdrType);
+    // get remote port from UDP or SCMP payload, which may follow an extension header
+    int l4Offset = hdrLenBytes;
+    if (hdrType == HeaderConstants.HdrTypes.HOP_BY_HOP
+        || hdrType == HeaderConstants.HdrTypes.END_TO_END) {
+      hdrType = HeaderConstants.HdrTypes.parse(ByteUtil.toUnsigned(data.get(hdrLenBytes)));
+      l4Offset += (ByteUtil.toUnsigned(data.get(hdrLenBytes + 1)) + 1) * 4;
+    }
+    data.position(l4Offset);
+    int srcPort = extractSrcPort(data, l4Offset, hdrType);
+    int dstPort = extractDstPort(data, l4Offset, hdrType);
 
     // rewind to original offset
     data.position(start);
@@ -305,8 +318,11 @@ public class ScionHeaderParser {
   public static int extractPathHeaderPosition(ByteBuffer data) {
     int nextHeader = ByteUtil.toUnsigned(data.get(4));
     if (nextHeader != HeaderConstants.HdrTypes.UDP.code()
-        && nextHeader != HeaderConstants.HdrTypes.SCMP.code()) {
-      throw new UnsupportedOperationException("This method supports only UDP and SCMP headers");
+        && nextHeader != HeaderConstants.HdrTypes.SCMP.code()
+        && nextHeader != HeaderConstants.HdrTypes.HOP_BY_HOP.code()
+        && nextHeader != HeaderConstants.HdrTypes.END_TO_END.code()) {
+      throw new UnsupportedOperationException(
+          "This method supports only UDP, SCMP and extension headers");
     }
 
     int pathType = ByteUtil.toUnsigned(data.get(8));
@@ -430,6 +446,20 @@ public class ScionHeaderParser {
     // TODO validate path
 
     data.position(start + hdrLenBytes);
+    if (nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
+        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code()) {
+      // An extension header: its first byte is the next header, the second its length in
+      // 4-byte lines minus one. Skip it and validate what follows.
+      if (data.remaining() < 2) {
+        return PRE + "Extension header too short";
+      }
+      nextHeader = ByteUtil.toUnsigned(data.get());
+      int extLenBytes = (ByteUtil.toUnsigned(data.get()) + 1) * 4;
+      if (data.remaining() < extLenBytes - 2) {
+        return PRE + "Extension header too short";
+      }
+      data.position(data.position() + extLenBytes - 2);
+    }
     if (nextHeader == HeaderConstants.HdrTypes.UDP.code()) {
       return validateUDP(data, start);
     } else if (nextHeader == HeaderConstants.HdrTypes.SCMP.code()) {

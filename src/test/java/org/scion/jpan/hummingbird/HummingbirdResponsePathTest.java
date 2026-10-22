@@ -47,7 +47,7 @@ class HummingbirdResponsePathTest {
    * 112. Made by the Go prototype's BuildReverseReservationExtn, from corpus/golden/
    * reverse_reservation_extn.json in hbird-conformance. Its Aks are synthetic.
    */
-  private static final byte[] REVERSE_RESERVATION =
+  static final byte[] REVERSE_RESERVATION =
       fromHex(
           "040b0b0001ff00000001110000002900000464101112131415161718191a1b1c1d1e1f6a7f08b8003c0000"
               + "0001ff00000001100001000200000864202122232425262728292a2b2c2d2e2f6a7f08b8003c0000"
@@ -76,9 +76,10 @@ class HummingbirdResponsePathTest {
   void testWithFlyovers() {
     long start = System.currentTimeMillis() / 1000 - 10;
     Flyover[] flyovers = new Flyover[4];
-    for (int i : new int[] {0, 1, 3}) {
-      flyovers[i] = new Flyover(0, 0, i + 1, 100, start, 60, AK);
-    }
+    // The interfaces in the direction of the reply: 111 0>41, 110 1>2 across the crossover, 112 1>0
+    flyovers[0] = new Flyover(0, 41, 1, 100, start, 60, AK);
+    flyovers[1] = new Flyover(1, 2, 2, 100, start, 60, AK);
+    flyovers[3] = new Flyover(1, 0, 4, 100, start, 60, AK);
     HummingbirdResponsePath received = reply();
     HummingbirdResponsePath path = received.withFlyovers(flyovers);
     assertEquals(5, path.getPathType());
@@ -116,6 +117,13 @@ class HummingbirdResponsePathTest {
     // A copy would have the flyovers but no authenticator.
     assertThrows(
         UnsupportedOperationException.class, () -> path.copy(InetAddress.getLoopbackAddress(), 1));
+
+    // A flyover for interfaces this path does not use: its Ak would not match at the router.
+    Flyover[] wrongInterfaces = new Flyover[4];
+    wrongInterfaces[1] = new Flyover(2, 1, 1, 100, 0, 60, AK);
+    assertThrows(IllegalArgumentException.class, () -> reply().withFlyovers(wrongInterfaces));
+    // Fewer slots than hop fields.
+    assertThrows(IllegalArgumentException.class, () -> reply().withFlyovers(new Flyover[3]));
   }
 
   /** Each flyover lands in its hop field's slot, with the values Go wrote. */
@@ -175,7 +183,8 @@ class HummingbirdResponsePathTest {
     // An option for 3 hop fields does not fit this path's 4.
     byte[] wrongCount = REVERSE_RESERVATION.clone();
     wrongCount[0] = 3;
-    assertThrows(IllegalArgumentException.class, () -> received.withReverseReservation(wrongCount));
+    // It comes from the network: the reply then goes without flyovers instead of failing.
+    assertSame(received, received.withReverseReservation(wrongCount));
   }
 
   /** The path bytes written for one packet of the given length. */

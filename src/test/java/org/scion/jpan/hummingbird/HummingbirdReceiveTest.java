@@ -24,6 +24,7 @@ import org.scion.jpan.Path;
 import org.scion.jpan.Scion;
 import org.scion.jpan.ScionDatagramChannel;
 import org.scion.jpan.ScionSocketOptions;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.HummingbirdExamplePacket;
 import org.scion.jpan.testutil.MockDatagramChannel;
 
@@ -40,11 +41,55 @@ class HummingbirdReceiveTest {
 
   @Test
   void testReceive() throws IOException {
+    Path reply = receive(null);
+    assertEquals(5, reply.getPathType());
+    // The last hop field is AS 111's own, (41, 0), so the reply leaves through interface 41.
+    assertEquals(ROUTER_111, reply.getFirstHopAddress());
+  }
+
+  /** The packet carries Go's ReversePath option, so the reply gets its flyovers. */
+  @Test
+  void testReceiveReverseReservation() throws IOException {
+    Path reply = receive(HummingbirdResponsePathTest.REVERSE_RESERVATION);
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reply.getRawPath()));
+    for (int i : new int[] {0, 1, 3}) {
+      assertTrue(path.getHopField(i).isFlyover(), "hop " + i);
+    }
+  }
+
+  /** An option that does not fit the path: the packet still arrives, the reply goes best effort. */
+  @Test
+  void testReceiveBrokenReverseReservation() throws IOException {
+    byte[] broken = HummingbirdResponsePathTest.REVERSE_RESERVATION.clone();
+    broken[0] = 3; // 3 hop fields, the path has 4
+    Path reply = receive(broken);
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reply.getRawPath()));
+    for (int i = 0; i < path.getHopFieldCount(); i++) {
+      assertFalse(path.getHopField(i).isFlyover(), "hop " + i);
+    }
+  }
+
+  /**
+   * Receives the Go packet in AS 111 and returns the reply path. With {@code reverse}, the packet
+   * carries it as end-to-end option 3 between the path and the UDP header, as a Go client does.
+   */
+  private static Path receive(byte[] reverse) throws IOException {
+    // Next header, length in 4-byte lines minus one, option type and data length, padding to 4
+    int pad = (4 - (4 + (reverse == null ? 0 : reverse.length)) % 4) % 4;
+    int extLen = reverse == null ? 0 : 4 + reverse.length + pad;
     MockDatagramChannel mock = MockDatagramChannel.open();
     mock.setReceiveCallback(
         buffer -> {
-          // The captured header, then the UDP header and payload of the 1288 bytes it announces
+          int start = buffer.position();
           buffer.put(HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111);
+          if (reverse != null) {
+            buffer.put(start + 4, (byte) 201); // next header: end-to-end extension
+            buffer.putShort(start + 6, (short) (1288 + extLen)); // payload length
+            buffer.put((byte) 17).put((byte) (extLen / 4 - 1));
+            buffer.put((byte) 3).put((byte) reverse.length).put(reverse);
+            buffer.put(new byte[pad]); // Pad1 bytes
+          }
+          // The UDP header and payload of the 1288 bytes the captured header announces
           buffer.putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
           buffer.putShort((short) 0); // UDP checksum, not checked
           buffer.put(new byte[1280]);
@@ -57,11 +102,9 @@ class HummingbirdReceiveTest {
       channel.bind(new InetSocketAddress("127.0.0.1", 32000));
       ByteBuffer payload = ByteBuffer.allocate(2000);
       Path reply = channel.receive(payload).getPath();
-
       assertEquals(1280, payload.position());
-      assertEquals(5, reply.getPathType());
-      // The last hop field is AS 111's own, (41, 0), so the reply leaves through interface 41.
-      assertEquals(ROUTER_111, reply.getFirstHopAddress());
+      assertEquals(40000, reply.getRemotePort()); // from the UDP header, behind the extension
+      return reply;
     }
   }
 }

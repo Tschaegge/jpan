@@ -24,6 +24,7 @@ import java.nio.channels.DatagramChannel;
 import java.nio.channels.NotYetConnectedException;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import org.scion.jpan.hummingbird.HummingbirdResponsePath;
 import org.scion.jpan.internal.*;
 import org.scion.jpan.internal.bootstrap.LocalAS;
 import org.scion.jpan.internal.header.ExtensionHeader;
@@ -514,13 +515,19 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       HeaderConstants.HdrTypes hdrType = ScionHeaderParser.extractNextHeader(buffer);
       // From here on we use linear reading using the buffer's position() mechanism
       buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
-      // Check for extension headers.
-      // This should be mostly unnecessary, however we sometimes saw SCMP error headers wrapped
-      // in extensions headers.
-      hdrType = receiveExtensionHeader(buffer, hdrType);
+      // Check for extension headers: SCMP errors are sometimes wrapped in one, and a Go
+      // Hummingbird client puts its reverse reservation into one.
+      ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
+      if (extHdr != null) {
+        hdrType = extHdr.nextHdr();
+      }
 
       InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);
       ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
+      byte[] reverse = extHdr == null ? null : extHdr.getOption(3); // Go's ReversePath option
+      if (reverse != null && path instanceof HummingbirdResponsePath) {
+        path = ((HummingbirdResponsePath) path).withReverseReservation(reverse);
+      }
       if (hdrType.code() == expectedHdrTypeId) {
         return path;
       } else if (hdrType == HeaderConstants.HdrTypes.SCMP) {
@@ -557,16 +564,27 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
 
   protected static HeaderConstants.HdrTypes receiveExtensionHeader(
       ByteBuffer buffer, HeaderConstants.HdrTypes hdrType) {
-    if (hdrType == HeaderConstants.HdrTypes.END_TO_END
-        || hdrType == HeaderConstants.HdrTypes.HOP_BY_HOP) {
-      ExtensionHeader extHdr = ExtensionHeader.consume(buffer);
-      // Currently we are not doing much here except hoping for an SCMP header
-      hdrType = extHdr.nextHdr();
-      if (hdrType != HeaderConstants.HdrTypes.SCMP) {
-        throw new UnsupportedOperationException("Extension header not supported: " + hdrType);
-      }
+    ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
+    return extHdr == null ? hdrType : extHdr.nextHdr();
+  }
+
+  /**
+   * Consumes the extension header, if the packet has one.
+   *
+   * @return the extension header, or null if hdrType is not an extension header
+   */
+  protected static ExtensionHeader consumeExtensionHeader(
+      ByteBuffer buffer, HeaderConstants.HdrTypes hdrType) {
+    if (hdrType != HeaderConstants.HdrTypes.END_TO_END
+        && hdrType != HeaderConstants.HdrTypes.HOP_BY_HOP) {
+      return null;
     }
-    return hdrType;
+    ExtensionHeader extHdr = ExtensionHeader.consume(buffer);
+    HeaderConstants.HdrTypes next = extHdr.nextHdr();
+    if (next != HeaderConstants.HdrTypes.SCMP && next != HeaderConstants.HdrTypes.UDP) {
+      throw new UnsupportedOperationException("Extension header not supported: " + next);
+    }
+    return extHdr;
   }
 
   protected void receiveScmp(ByteBuffer buffer, ResponsePath path) throws IOException {
