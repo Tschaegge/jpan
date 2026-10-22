@@ -32,6 +32,7 @@ public class HummingbirdPathRaw {
   public static final int LINE_LEN = 4;
   public static final int HOP_LINES = 3;
   public static final int FLYOVER_LINES = 5;
+  static final int INFO_FIELD_LEN = 8;
   static final int MAX_HOP_FIELDS = 64;
 
   // path meta header
@@ -220,6 +221,14 @@ public class HummingbirdPathRaw {
     return hopStartLine[hopIdx];
   }
 
+  /**
+   * Returns the byte offset of hop field {@code hopIdx} in the raw path: behind the meta header and
+   * the info fields, then {@code hopStartLine} lines of 4 bytes.
+   */
+  public int getHopFieldOffset(int hopIdx) {
+    return META_LEN + getSegmentCount() * INFO_FIELD_LEN + getHopStartLine(hopIdx) * LINE_LEN;
+  }
+
   public InfoField getInfoField(int i) {
     if (i < 0 || i >= getSegmentCount()) {
       throw new IllegalArgumentException(
@@ -252,22 +261,44 @@ public class HummingbirdPathRaw {
     }
   }
 
-  /** Returns the seconds part of the packet timestamp, as unsigned Unix seconds. */
   public long getBaseTimestamp() {
     return Integer.toUnsignedLong(baseTsRaw);
   }
 
-  /**
-   * Returns the sub-second part of the packet timestamp in milliseconds, 0..999. This is the
-   * millisecond part of the same instant as {@link #getBaseTimestamp()}, not an offset from it.
-   */
   public int getMillis() {
     return highResTsRaw >>> 22;
   }
 
-  /** Returns the per-packet counter, 22 bits, used to keep the flyover MAC input unique. */
   public int getCounter() {
     return highResTsRaw & 0x3FFFFF;
+  }
+
+  /** Ingress of hop {@code hopIdx} in travel direction. At a crossover it is the previous hop's. */
+  public int getFlyoverIngress(int hopIdx) {
+    if (getCrossOver(hopIdx) == 1) {
+      return travelIngress(hopIdx - 1);
+    }
+    return travelIngress(hopIdx);
+  }
+
+  /** Egress of hop {@code hopIdx} in travel direction. At a crossover it is the next hop's. */
+  public int getFlyoverEgress(int hopIdx) {
+    if (getCrossOver(hopIdx) == -1) {
+      return travelEgress(hopIdx + 1);
+    }
+    return travelEgress(hopIdx);
+  }
+
+  private int travelIngress(int hopIdx) {
+    FlyoverHopField hop = getHopField(hopIdx);
+    boolean consDir = getInfoField(getSegmentIndex(hopIdx)).hasConstructionDirection();
+    return consDir ? hop.getIngress() : hop.getEgress();
+  }
+
+  private int travelEgress(int hopIdx) {
+    FlyoverHopField hop = getHopField(hopIdx);
+    boolean consDir = getInfoField(getSegmentIndex(hopIdx)).hasConstructionDirection();
+    return consDir ? hop.getEgress() : hop.getIngress();
   }
 
   @Override

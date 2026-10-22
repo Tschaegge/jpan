@@ -104,6 +104,20 @@ public class ByteUtil {
     return dst | mask;
   }
 
+  /**
+   * Checks that {@code value} fits an unsigned field of {@code bits} bits. {@link #writeInt} does
+   * not mask, so a value that does not fit its field would leak into the neighbouring field.
+   *
+   * @param name the field name, for the error message
+   * @throws IllegalArgumentException if {@code value} is negative or needs more than {@code bits}
+   */
+  public static void checkWidth(String name, int value, int bits) {
+    if (value < 0 || value >= (1 << bits)) {
+      throw new IllegalArgumentException(
+          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
+    }
+  }
+
   public static int write16(int dst, int bitOffset, int value) {
     int mask = (value & 0xFFFF) << (32 - bitOffset - 16);
     return dst | mask;

@@ -14,6 +14,8 @@
 
 package org.scion.jpan.internal.header;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
+
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import javax.crypto.Cipher;
@@ -27,6 +29,9 @@ import javax.crypto.spec.SecretKeySpec;
  * <p>Specified in Appendix A.4, Eq. (6) and (7), of "Hummingbird: Fast, Flexible, and Fair
  * Inter-Domain Bandwidth Reservations" (SIGCOMM 2025, https://doi.org/10.1145/3718958.3750495). The
  * paper calls the function PRF. Its section 7.1 names it AES-128.
+ *
+ * <p>One instance per flyover. It keeps the cipher over the flyover's Ak and two arrays that it
+ * reuses for every packet, so computing a MAC allocates nothing. Not thread safe.
  */
 public final class HummingbirdMac {
 
@@ -34,7 +39,17 @@ public final class HummingbirdMac {
   public static final int BLOCK_LEN = 16;
   public static final int MAC_LEN = 6;
 
-  private HummingbirdMac() {}
+  private final Cipher akCipher;
+  private final byte[] in = new byte[BLOCK_LEN]; // the MAC input, refilled for every packet
+  private final ByteBuffer inBuf = ByteBuffer.wrap(in); // a view on in, made once
+  private final byte[] vk = new byte[BLOCK_LEN]; // the flyover MAC, overwritten by every call
+
+  /**
+   * @param ak the flyover's 16 byte authentication key
+   */
+  public HummingbirdMac(byte[] ak) {
+    this.akCipher = createCipher(ak);
+  }
 
   /**
    * An encrypting AES-128 cipher over a 16 byte key. Reusable across calls: keep one per secret
@@ -58,48 +73,40 @@ public final class HummingbirdMac {
    * Computes the flyover MAC for one packet, Eq. (7a) without the truncation to 6 bytes, which
    * happens in {@link #aggregateMac}.
    *
-   * @param akCipher a cipher over the flyover's Ak, from {@link #createCipher}
    * @param dstIsdAs the packet's destination ISD and AS, DstAddr in Eq. (7c)
    * @param pktLen the length of the whole packet in bytes, PayloadLen + 4 * HdrLen (Eq. 7d)
    * @param resStartTime seconds between the packet's base timestamp and the reservation start, the
    *     value carried in the hop field
    * @param highResTs the packet's high resolution timestamp, millis shifted 22 bits left, ORed with
    *     the duplicate detection counter
-   * @return the full 16 byte AES block
+   * @return the full 16 byte AES block. The next call overwrites it, copy it to keep it.
    */
-  public static byte[] flyoverMac(
-      Cipher akCipher, long dstIsdAs, int pktLen, int resStartTime, int highResTs) {
+  public byte[] flyoverMac(long dstIsdAs, int pktLen, int resStartTime, int highResTs) {
     checkWidth("pktLen", pktLen, 16);
     checkWidth("resStartTime", resStartTime, 16);
 
-    byte[] block = new byte[BLOCK_LEN];
-    ByteBuffer bb = ByteBuffer.wrap(block);
-    bb.putLong(dstIsdAs);
-    bb.putShort((short) pktLen);
-    bb.putShort((short) resStartTime);
-    bb.putInt(highResTs);
+    inBuf.clear(); // back to position 0, the 16 bytes are overwritten below
+    inBuf.putLong(dstIsdAs);
+    inBuf.putShort((short) pktLen);
+    inBuf.putShort((short) resStartTime);
+    inBuf.putInt(highResTs);
     try {
-      akCipher.doFinal(block, 0, BLOCK_LEN, block, 0); // encrypts in place
-      return block;
+      akCipher.doFinal(in, 0, BLOCK_LEN, vk, 0);
+      return vk;
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(e); // one full block, no padding: cannot happen
     }
   }
 
-  /** XORs the first six bytes of the flyover MAC into the SCION MAC. */
-  public static byte[] aggregateMac(byte[] scionMac, byte[] flyoverMac) {
-    byte[] out = new byte[MAC_LEN];
+  /**
+   * Computes the flyover MAC of one packet and XORs its first six bytes into the SCION MAC at
+   * {@code macPos} of the packet, in place.
+   */
+  public void aggregateMac(
+      ByteBuffer packet, int macPos, long dstIsdAs, int pktLen, int resStartTime, int highResTs) {
+    byte[] mac = flyoverMac(dstIsdAs, pktLen, resStartTime, highResTs);
     for (int i = 0; i < MAC_LEN; i++) {
-      out[i] = (byte) (scionMac[i] ^ flyoverMac[i]);
-    }
-    return out;
-  }
-
-  /** A value that does not fit its field would leak into the neighbouring field. */
-  private static void checkWidth(String name, int value, int bits) {
-    if (value < 0 || value >= (1 << bits)) {
-      throw new IllegalArgumentException(
-          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
+      packet.put(macPos + i, (byte) (packet.get(macPos + i) ^ mac[i]));
     }
   }
 }

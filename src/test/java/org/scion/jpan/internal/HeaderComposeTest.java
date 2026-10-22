@@ -87,6 +87,7 @@ class HeaderComposeTest {
         p,
         userPacket.limit() + 8,
         path.length,
+        HeaderConstants.PathTypes.SCION.code(),
         srcIA,
         srcAddress,
         dstIA,

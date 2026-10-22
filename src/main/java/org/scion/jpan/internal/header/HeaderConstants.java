@@ -43,7 +43,8 @@ public interface HeaderConstants {
     SCION(1),
     ONE_HOP(2),
     EPIC(3),
-    COLIBRI(4);
+    COLIBRI(4),
+    HUMMINGBIRD(5);
 
     private final int code;
 
