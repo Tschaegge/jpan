@@ -14,6 +14,7 @@
 
 package org.scion.jpan.internal.header;
 
+import static org.scion.jpan.internal.util.ByteUtil.checkWidth;
 import static org.scion.jpan.internal.util.ByteUtil.readInt;
 import static org.scion.jpan.internal.util.ByteUtil.writeInt;
 
@@ -22,7 +23,7 @@ import org.scion.jpan.internal.util.ByteUtil;
 
 public class HummingbirdPathConverter {
 
-  private static final int INFO_FIELD_LEN = 8;
+  private static final int INFO_FIELD_LEN = HummingbirdPathRaw.INFO_FIELD_LEN;
   private static final int HOP_FIELD_LEN =
       HummingbirdPathRaw.HOP_LINES * HummingbirdPathRaw.LINE_LEN;
   private static final int FLYOVER_FIELD_LEN =
@@ -40,8 +41,11 @@ public class HummingbirdPathConverter {
    * @param baseTs seconds of the packet timestamp, a field SCION does not have
    * @param millis sub-second part of the same instant, 0..999
    * @param counter 22-bit per-packet counter; together with millis it forms HighResTS
+   * @throws IllegalArgumentException if millis does not fit 10 bits or counter 22 bits
    */
   public static byte[] convertFromScion(byte[] scionPath, long baseTs, int millis, int counter) {
+    checkWidth("millis", millis, 10);
+    checkWidth("counter", counter, 22);
     int i0 = ByteBuffer.wrap(scionPath).getInt();
 
     // SCION counts hop fields, Hummingbird counts 4-byte lines. A hop field is 3 lines.
@@ -128,11 +132,7 @@ public class HummingbirdPathConverter {
       throw new IllegalArgumentException("Hop field " + hopIndex + " already has a flyover");
     }
 
-    // Where this hop field starts
-    int hopOffset =
-        HummingbirdPathRaw.META_LEN
-            + p.getSegmentCount() * INFO_FIELD_LEN
-            + p.getHopStartLine(hopIndex) * HummingbirdPathRaw.LINE_LEN;
+    int hopOffset = p.getHopFieldOffset(hopIndex);
 
     // The hop field is two lines longer now, so we need to adjust segLen
     int[] segLen = new int[3];
@@ -168,13 +168,42 @@ public class HummingbirdPathConverter {
   }
 
   /**
-   * {@link ByteUtil#writeInt} does not mask, so a value that does not fit its field would leak into
-   * the neighbouring field. Check first.
+   * Reverses a Hummingbird path for the reply. Reverse (Appendix A.8): flyovers removed, info
+   * fields and hop fields in reverse order, ConsDir flipped.
    */
-  private static void checkWidth(String name, int value, int bits) {
-    if (value < 0 || value >= (1 << bits)) {
-      throw new IllegalArgumentException(
-          name + " must fit " + bits + " bits (0.." + ((1 << bits) - 1) + "), got " + value);
+  public static byte[] reverse(byte[] input) {
+    if (input.length == 0) {
+      return input.clone();
     }
+    byte[] path = removeFlyovers(input);
+    HummingbirdPathRaw p = HummingbirdPathRaw.create(ByteBuffer.wrap(path));
+    int numInfoFields = p.getSegmentCount();
+    int numHopFields = p.getHopFieldCount();
+    ByteBuffer bb = ByteBuffer.allocate(path.length);
+
+    int[] segLen = new int[3];
+    for (int seg = 0; seg < numInfoFields; seg++) {
+      // reverse order, works for 1 to 3 segments
+      segLen[seg] = p.getSegLen(numInfoFields - 1 - seg);
+    }
+    int numLines = numHopFields * HummingbirdPathRaw.HOP_LINES;
+    // 0 when the path is reversed at its destination
+    int currINF = numInfoFields - p.getCurrINF() - 1;
+    int currHF = numLines - p.getCurrHF() - HummingbirdPathRaw.HOP_LINES;
+    bb.putInt(metaHeaderFirstWord(currINF, currHF, segLen));
+    bb.put(path, 4, 8); // BaseTS and HighResTS
+
+    // Info fields in reverse order, each with ConsDir flipped.
+    for (int i = numInfoFields - 1; i >= 0; i--) {
+      int src = HummingbirdPathRaw.META_LEN + i * INFO_FIELD_LEN;
+      bb.put((byte) (path[src] ^ 1));
+      bb.put(path, src + 1, INFO_FIELD_LEN - 1);
+    }
+
+    // Hop fields in reverse order, their bytes (and MACs) unchanged.
+    for (int i = numHopFields - 1; i >= 0; i--) {
+      bb.put(path, p.getHopFieldOffset(i), HOP_FIELD_LEN);
+    }
+    return bb.array();
   }
 }

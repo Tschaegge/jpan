@@ -144,4 +144,55 @@ public class HummingbirdConverterTest {
         IllegalArgumentException.class,
         () -> HummingbirdPathConverter.insertFlyover(stripped, 4, 1, 1023, 2, 9));
   }
+
+  @Test
+  void testConvertFromScionRejectsBadTimestamp() {
+    // millis is a 10-bit field
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.convertFromScion(scionPathtiny, 0, 1 << 10, 0));
+    // counter is a 22-bit field, 1 << 22 would overwrite the lowest millis bit
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HummingbirdPathConverter.convertFromScion(scionPathtiny, 0, 0, 1 << 22));
+  }
+
+  /**
+   * The reply path (Appendix A.8): flyovers gone, segments and hop fields in reverse order, ConsDir
+   * flipped and the current hop mirrored.
+   */
+  @Test
+  void testReverse() {
+    HummingbirdPathRaw r =
+        HummingbirdPathRaw.create(ByteBuffer.wrap(HummingbirdPathConverter.reverse(hbirdPath)));
+    assertEquals(76, r.length()); // 100 bytes minus 8 for each of the three flyovers
+    assertEquals(41, r.getHopField(0).getIngress()); // AS 111 comes first now
+    assertFalse(r.getInfoField(0).hasConstructionDirection()); // was segment 1, ConsDir 1
+    assertEquals(1, r.getCurrINF()); // the input is a sender's path, CurrINF 0 and CurrHF 0
+    assertEquals(9, r.getCurrHF());
+
+    // Only the peering path has segments of different lengths, 3 and 9 lines; tiny4 has 6 and 6.
+    byte[] peering =
+        HummingbirdPathConverter.reverse(
+            HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM);
+    HummingbirdPathRaw p = HummingbirdPathRaw.create(ByteBuffer.wrap(peering));
+    assertEquals(9, p.getSegLen(0));
+    assertEquals(3, p.getSegLen(1));
+  }
+
+  /** A destination in the local AS has an empty path, and so has the reply. */
+  @Test
+  void testReverseEmptyPath() {
+    assertArrayEquals(new byte[0], HummingbirdPathConverter.reverse(new byte[0]));
+  }
+
+  /** Reversing twice gives the input back, only without its flyovers. */
+  @Test
+  void testReverseTwice() {
+    for (byte[] path :
+        new byte[][] {hbirdPath, HummingbirdExamplePacket.PATH_RAW_HBIRD_PEERING_DOWNSTREAM}) {
+      byte[] twice = HummingbirdPathConverter.reverse(HummingbirdPathConverter.reverse(path));
+      assertArrayEquals(HummingbirdPathConverter.removeFlyovers(path), twice);
+    }
+  }
 }
