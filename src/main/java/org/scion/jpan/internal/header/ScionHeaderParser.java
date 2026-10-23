@@ -128,7 +128,7 @@ public class ScionHeaderParser {
     if (path.length > 0) {
       // raw path may be empty for local AS
       data.get(path);
-      if (pathType == 5) {
+      if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
         path = HummingbirdPathConverter.reverse(path);
       } else {
         reversePathInPlace(ByteBuffer.wrap(path));
@@ -149,7 +149,7 @@ public class ScionHeaderParser {
     // rewind to original offset
     data.position(start);
     // Swap src and dst.
-    if (pathType == 5) {
+    if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       return new HummingbirdResponsePath(
           path, dstIsdAs, dstIP, dstPort, srcIsdAs, srcIP, srcPort, firstHopAddress);
     }
@@ -378,7 +378,9 @@ public class ScionHeaderParser {
           + (hdrLenBytes + payLoadLen);
     }
     int pathType = ByteUtil.readInt(i2, 0, 8);
-    if (pathType != 1 && pathType != 0 && pathType != 5) {
+    if (pathType != 1
+        && pathType != 0
+        && pathType != HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       // Validation against path length happens further down.
       return PRE + "Invalid path type: expected 0, 1 or 5, got " + pathType;
     }
@@ -440,7 +442,9 @@ public class ScionHeaderParser {
     if (path.length == 0 && pathType != 0) {
       return PRE + "Path is empty but path type is: " + pathType;
     }
-    if (path.length > 0 && pathType != 1 && pathType != 5) {
+    if (path.length > 0
+        && pathType != 1
+        && pathType != HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       return PRE + "Path is not empty but path type is: " + pathType;
     }
     // TODO validate path

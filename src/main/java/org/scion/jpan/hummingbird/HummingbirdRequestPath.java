@@ -26,19 +26,20 @@ import org.scion.jpan.internal.header.HummingbirdPathConverter;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 
 /**
- * A Hummingbird path with flyovers, for sending through a {@link
- * org.scion.jpan.ScionDatagramChannel} with reservations. A {@link
- * org.scion.jpan.ScionDatagramSocket} cannot send with it, because the socket takes only addresses
- * from the application and chooses the path itself.
+ * A Hummingbird path for requests, with flyovers for sending with reservations. It wraps the SCION
+ * {@link RequestPath} it was built from rather than extending it, because its bytes differ from
+ * those of the SCION path. Send it through {@link
+ * org.scion.jpan.ScionDatagramChannel#send(java.nio.ByteBuffer, Path)}, or through a {@link
+ * org.scion.jpan.ScionDatagramSocket} with a {@link org.scion.jpan.ScionDatagramPacket}.
  */
-public class ReservedPath extends Path {
+public class HummingbirdRequestPath extends Path {
 
   private final Path scionPath;
   private final FlyoverAuthenticator authenticator;
   private final byte[] e2eOptions; // the reverse reservation option, null for none
   private boolean e2eOptionsSent; // guarded by this: the option goes with one packet only
 
-  public ReservedPath(Path scionPath, Flyover[] flyovers) {
+  public HummingbirdRequestPath(Path scionPath, Flyover[] flyovers) {
     super(
         toHummingbird(scionPath, flyovers),
         scionPath.getFirstHopAddress(),
@@ -51,15 +52,16 @@ public class ReservedPath extends Path {
     this.e2eOptions = null;
   }
 
-  /** The same path as {@code original}, which also sends {@code e2eOptions} once. */
-  private ReservedPath(ReservedPath original, byte[] e2eOptions) {
+  /** The same path as {@code original}, to dstIP and dstPort, sending e2eOptions once. */
+  private HummingbirdRequestPath(
+      HummingbirdRequestPath original, InetAddress dstIP, int dstPort, byte[] e2eOptions) {
     super(
         original.getRawPath(),
         original.getFirstHopAddress(),
         original.getLocalIsdAs(),
         original.getRemoteIsdAs(),
-        original.getRemoteAddress(),
-        original.getRemotePort());
+        dstIP,
+        dstPort);
     this.scionPath = original.scionPath;
     // Shared, so the counter of the two paths keeps counting up together.
     this.authenticator = original.authenticator;
@@ -76,7 +78,7 @@ public class ReservedPath extends Path {
    * @throws IllegalArgumentException if the flyovers do not fit the reverse path, or do not fit
    *     into one option
    */
-  public ReservedPath withReverseReservation(Flyover[] reverseFlyovers) {
+  public HummingbirdRequestPath withReverseReservation(Flyover[] reverseFlyovers) {
     byte[] reverse = HummingbirdPathConverter.reverse(getRawPath());
     FlyoverAuthenticator.checkFlyovers(reverse, reverseFlyovers);
     HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reverse));
@@ -98,7 +100,7 @@ public class ReservedPath extends Path {
     option[0] = 3; // the Go prototype's OptTypeReversePath
     option[1] = (byte) data.length;
     System.arraycopy(data, 0, option, 2, data.length);
-    return new ReservedPath(this, option);
+    return new HummingbirdRequestPath(this, getRemoteAddress(), getRemotePort(), option);
   }
 
   /**
@@ -147,6 +149,7 @@ public class ReservedPath extends Path {
       throw new IllegalArgumentException("Length of Path can't be 0");
     }
     byte[] path = HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
+    FlyoverAuthenticator.checkFlyovers(path, flyovers);
     return FlyoverAuthenticator.insertFlyovers(path, flyovers);
   }
 
@@ -203,7 +206,9 @@ public class ReservedPath extends Path {
 
   @Override
   public Path copy(InetAddress dstIP, int dstPort) {
-    throw new UnsupportedOperationException("not needed yet");
+    // The flyover MACs cover the destination AS only, so they hold for any host in it. The reverse
+    // reservation was offered to the original receiver and does not go along.
+    return new HummingbirdRequestPath(this, dstIP, dstPort, null);
   }
 
   @Override
@@ -214,7 +219,7 @@ public class ReservedPath extends Path {
   @Override
   public void writePath(ByteBuffer buffer, int packetLength) {
     int start = buffer.position();
-    buffer.put(getRawPath());
+    super.writePath(buffer, packetLength);
     authenticator.authenticate(buffer, start, getRemoteIsdAs(), packetLength);
   }
 }

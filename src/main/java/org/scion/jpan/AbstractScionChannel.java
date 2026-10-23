@@ -526,7 +526,7 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
       byte[] reverse = extHdr == null ? null : extHdr.getOption(3); // Go's ReversePath option
       if (reverse != null && path instanceof HummingbirdResponsePath) {
-        path = ((HummingbirdResponsePath) path).withReverseReservation(reverse);
+        path = ((HummingbirdResponsePath) path).acceptReverseReservation(reverse);
       }
       if (hdrType.code() == expectedHdrTypeId) {
         return path;
@@ -545,12 +545,11 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       // If we don't have a path (local AS) we need to use the underlay IP address.
       if (pathPos > 0) {
         int interfaceId;
-        if (ByteUtil.toUnsigned(buffer.get(8)) == 5) {
+        if (ByteUtil.toUnsigned(buffer.get(8)) == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
           int oldPos = buffer.position();
           buffer.position(pathPos);
           HummingbirdPathRaw path = HummingbirdPathRaw.create(buffer);
-          HummingbirdPathRaw.FlyoverHopField last = path.getHopField(path.getHopFieldCount() - 1);
-          interfaceId = last.getIngress() == 0 ? last.getEgress() : last.getIngress();
+          interfaceId = path.getFlyoverIngress(path.getHopFieldCount() - 1);
           buffer.position(oldPos);
         } else {
           interfaceId = PathRawParserLight.extractLastInterfaceID(buffer, pathPos);
@@ -891,7 +890,7 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
           e2eOptions == null ? hdrTypeId : HeaderConstants.HdrTypes.END_TO_END.code(),
           cfgTrafficClass);
 
-      // PacketLength is needed for MAC at ReservedPaths
+      // Paths with flyovers need the packet length for their MACs
       int packetLength = buffer.position() + rawPath.length + extLength + payloadLength;
       path.writePath(buffer, packetLength);
       if (e2eOptions != null) {

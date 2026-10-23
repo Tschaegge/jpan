@@ -96,7 +96,7 @@ class HummingbirdResponsePathTest {
       assertEquals(i + 1, after.getHopField(i).getResID());
       int resStartOffset = after.getHopField(i).getResStartOffset();
 
-      // AggMAC = SCION MAC XOR the first 6 bytes of Vk, as in ReservedPathTest.testFlyover().
+      // AggMAC = SCION MAC XOR the first 6 bytes of Vk, as in HummingbirdRequestPathTest
       int scionMac = before.getHopFieldOffset(i) + 6;
       int aggMac = after.getHopFieldOffset(i) + 6;
       byte[] vk = new HummingbirdMac(AK).flyoverMac(IA_112, 100, resStartOffset, highResTs);
@@ -114,10 +114,6 @@ class HummingbirdResponsePathTest {
     HummingbirdResponsePath path = reply().withFlyovers(new Flyover[4]);
     // Its bytes have flyovers already, inserting them again would shift the hop fields.
     assertThrows(IllegalStateException.class, () -> path.withFlyovers(new Flyover[4]));
-    // A copy would have the flyovers but no authenticator.
-    assertThrows(
-        UnsupportedOperationException.class, () -> path.copy(InetAddress.getLoopbackAddress(), 1));
-
     // A flyover for interfaces this path does not use: its Ak would not match at the router.
     Flyover[] wrongInterfaces = new Flyover[4];
     wrongInterfaces[1] = new Flyover(2, 1, 1, 100, 0, 60, AK);
@@ -168,9 +164,9 @@ class HummingbirdResponsePathTest {
    * reservation that started less than 65536 s ago, and this one is from the recorded packet.
    */
   @Test
-  void testWithReverseReservation() {
+  void testAcceptReverseReservation() {
     HummingbirdResponsePath received = reply();
-    HummingbirdResponsePath path = received.withReverseReservation(REVERSE_RESERVATION);
+    HummingbirdResponsePath path = received.acceptReverseReservation(REVERSE_RESERVATION);
     HummingbirdPathRaw template = HummingbirdPathRaw.create(ByteBuffer.wrap(path.getRawPath()));
     assertFalse(template.getHopField(2).isFlyover());
     int resID = 1;
@@ -184,7 +180,25 @@ class HummingbirdResponsePathTest {
     byte[] wrongCount = REVERSE_RESERVATION.clone();
     wrongCount[0] = 3;
     // It comes from the network: the reply then goes without flyovers instead of failing.
-    assertSame(received, received.withReverseReservation(wrongCount));
+    assertSame(received, received.acceptReverseReservation(wrongCount));
+  }
+
+  /** A copy goes to another host or port in the same AS and keeps stamping the flyovers. */
+  @Test
+  void testCopy() {
+    long start = System.currentTimeMillis() / 1000 - 10;
+    Flyover[] flyovers = new Flyover[4];
+    flyovers[0] = new Flyover(0, 41, 1, 100, start, 60, AK);
+    HummingbirdResponsePath path = reply().withFlyovers(flyovers);
+    HummingbirdResponsePath copy =
+        (HummingbirdResponsePath) path.copy(InetAddress.getLoopbackAddress(), 40001);
+    assertEquals(40001, copy.getRemotePort());
+    assertEquals(5, copy.getPathType());
+    assertArrayEquals(path.getRawPath(), copy.getRawPath());
+    // One authenticator for both: the counter goes on from the original to the copy.
+    int first = HummingbirdPathRaw.create(ByteBuffer.wrap(write(path, 100))).getCounter();
+    int second = HummingbirdPathRaw.create(ByteBuffer.wrap(write(copy, 100))).getCounter();
+    assertEquals(first + 1, second);
   }
 
   /** A cache keeps a running reservation against later packets without one. */

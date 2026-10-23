@@ -44,19 +44,23 @@ public class HummingbirdResponsePath extends ResponsePath {
     this.authenticator = null;
   }
 
-  /** The same reply as {@code original}, with flyovers inserted. */
-  private HummingbirdResponsePath(HummingbirdResponsePath original, Flyover[] flyovers) {
+  /** The same reply as {@code original}, with other bytes, destination or authenticator. */
+  private HummingbirdResponsePath(
+      HummingbirdResponsePath original,
+      byte[] rawPath,
+      InetAddress dstIP,
+      int dstPort,
+      FlyoverAuthenticator authenticator) {
     super(
-        FlyoverAuthenticator.insertFlyovers(original.getRawPath(), flyovers),
+        rawPath,
         original.getLocalIsdAs(),
         original.getLocalAddress(),
         original.getLocalPort(),
         original.getRemoteIsdAs(),
-        original.getRemoteAddress(),
-        original.getRemotePort(),
+        dstIP,
+        dstPort,
         original.getFirstHopAddress());
-    // getRawPath() is the new template, with the flyovers.
-    this.authenticator = new FlyoverAuthenticator(getRawPath(), flyovers);
+    this.authenticator = authenticator;
   }
 
   /** Unix seconds at which the first of this reply's flyovers ends, 0 without flyovers. */
@@ -85,7 +89,8 @@ public class HummingbirdResponsePath extends ResponsePath {
   }
 
   /**
-   * Returns this reply with flyovers, to reply with reservations. This path stays unchanged.
+   * Returns this reply with flyovers, to reply with reservations. This path stays unchanged. Build
+   * it once and reuse it for every reply: creating it sets up a cipher per flyover.
    *
    * @param flyovers one slot per hop field in the direction of the reply, so slot 0 is the local
    *     AS. null for a hop without reservation.
@@ -97,7 +102,13 @@ public class HummingbirdResponsePath extends ResponsePath {
       throw new IllegalStateException("This path already has flyovers.");
     }
     FlyoverAuthenticator.checkFlyovers(getRawPath(), flyovers);
-    return new HummingbirdResponsePath(this, flyovers);
+    byte[] template = FlyoverAuthenticator.insertFlyovers(getRawPath(), flyovers);
+    return new HummingbirdResponsePath(
+        this,
+        template,
+        getRemoteAddress(),
+        getRemotePort(),
+        new FlyoverAuthenticator(template, flyovers));
   }
 
   /**
@@ -106,10 +117,10 @@ public class HummingbirdResponsePath extends ResponsePath {
    * network, so unlike {@link #withFlyovers}, data that does not fit this path is not an error: the
    * reply then goes without flyovers, best effort.
    *
-   * @param optData the option's data, as BuildReverseReservationExtn in the Go prototype's
-   *     pkg/hummingbird/reverse.go writes it
+   * @param optData the option's data, as {@link HummingbirdRequestPath#withReverseReservation} or
+   *     BuildReverseReservationExtn in the Go prototype's pkg/hummingbird/reverse.go writes it
    */
-  public HummingbirdResponsePath withReverseReservation(byte[] optData) {
+  public HummingbirdResponsePath acceptReverseReservation(byte[] optData) {
     try {
       return this.withFlyovers(parseReverseReservation(optData));
     } catch (IllegalArgumentException
@@ -174,18 +185,7 @@ public class HummingbirdResponsePath extends ResponsePath {
 
   @Override
   public Path copy(InetAddress dstIP, int dstPort) {
-    if (authenticator != null) {
-      // The copy would carry the flyovers without an authenticator.
-      throw new UnsupportedOperationException("not needed yet");
-    }
-    return new HummingbirdResponsePath(
-        getRawPath(),
-        getLocalIsdAs(),
-        getLocalAddress(),
-        getLocalPort(),
-        getRemoteIsdAs(),
-        dstIP,
-        dstPort,
-        getFirstHopAddress());
+    // The flyover MACs cover the destination AS only, so they hold for any host in it.
+    return new HummingbirdResponsePath(this, getRawPath(), dstIP, dstPort, authenticator);
   }
 }

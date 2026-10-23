@@ -101,7 +101,7 @@ public class SelectingDatagramChannel extends ScionDatagramChannel {
             ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
             byte[] reverse = extHdr == null ? null : extHdr.getOption(3); // Go's ReversePath
             if (reverse != null && path instanceof HummingbirdResponsePath) {
-              path = ((HummingbirdResponsePath) path).withReverseReservation(reverse);
+              path = ((HummingbirdResponsePath) path).acceptReverseReservation(reverse);
             }
             if (hdrType == expectedHdrType) {
               return path;

@@ -17,6 +17,7 @@ package org.scion.jpan.hummingbird;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -34,12 +35,12 @@ import org.scion.jpan.testutil.ExamplePacket;
 import org.scion.jpan.testutil.MockDatagramChannel;
 
 /**
- * Checks the path bytes a ReservedPath writes for each packet: fresh timestamps and, for a flyover,
- * its fields and the aggregated MAC. That the channel hands writePath the right packet length is
- * tested in PathSubclassTest, and the same with real routers is {@code make live} in
+ * Checks the path bytes a HummingbirdRequestPath writes for each packet: fresh timestamps and, for
+ * a flyover, its fields and the aggregated MAC. That the channel hands writePath the right packet
+ * length is tested in PathSubclassTest, and the same with real routers is {@code make live} in
  * hbird-conformance.
  */
-class ReservedPathTest {
+class HummingbirdRequestPathTest {
 
   private static final long DST_ISD_AS = ScionUtil.parseIA("1-ff00:0:111");
 
@@ -54,7 +55,7 @@ class ReservedPathTest {
 
   @Test
   void testNoFlyover() {
-    ReservedPath path = new ReservedPath(scionPath(), new Flyover[0]);
+    HummingbirdRequestPath path = new HummingbirdRequestPath(scionPath(), new Flyover[0]);
     assertEquals(5, path.getPathType()); // Hummingbird
     assertEquals(36 + 8, path.getRawPath().length); // the meta header grows from 4 to 12 bytes
   }
@@ -62,7 +63,7 @@ class ReservedPathTest {
   /** Every packet carries the time it was sent, and the counter goes up by one per packet. */
   @Test
   void testTimestamps() {
-    ReservedPath path = new ReservedPath(scionPath(), new Flyover[0]);
+    HummingbirdRequestPath path = new HummingbirdRequestPath(scionPath(), new Flyover[0]);
     long before = System.currentTimeMillis() / 1000;
     HummingbirdPathRaw first = HummingbirdPathRaw.create(ByteBuffer.wrap(write(path, 100)));
     HummingbirdPathRaw second = HummingbirdPathRaw.create(ByteBuffer.wrap(write(path, 100)));
@@ -81,8 +82,9 @@ class ReservedPathTest {
   @Test
   void testFlyover() {
     long start = System.currentTimeMillis() / 1000 - 10;
-    Flyover flyover = new Flyover(0, 1, 1, 1023, start, 60, AK);
-    ReservedPath path = new ReservedPath(scionPath(), new Flyover[] {flyover, null});
+    Flyover flyover = new Flyover(0, 2, 1, 1023, start, 60, AK); // the path leaves through 2
+    HummingbirdRequestPath path =
+        new HummingbirdRequestPath(scionPath(), new Flyover[] {flyover, null});
     assertEquals(36 + 8 + 8, path.getRawPath().length); // 8 more for the flyover
 
     byte[] scionMac = Arrays.copyOfRange(SCION_PATH, 18, 24); // hop 0 at 4 + 8, its MAC at +6
@@ -119,15 +121,17 @@ class ReservedPathTest {
             8080,
             new byte[0],
             new InetSocketAddress("127.0.0.1", 31000));
-    assertThrows(IllegalArgumentException.class, () -> new ReservedPath(local, new Flyover[0]));
+    assertThrows(
+        IllegalArgumentException.class, () -> new HummingbirdRequestPath(local, new Flyover[0]));
 
     // Its bytes are Hummingbird already, wrapping it would convert them a second time.
-    ReservedPath reserved = new ReservedPath(scionPath(), new Flyover[0]);
-    assertThrows(IllegalStateException.class, () -> new ReservedPath(reserved, new Flyover[0]));
+    HummingbirdRequestPath reserved = new HummingbirdRequestPath(scionPath(), new Flyover[0]);
+    assertThrows(
+        IllegalStateException.class, () -> new HummingbirdRequestPath(reserved, new Flyover[0]));
   }
 
-  /** The path bytes the ReservedPath writes for one packet of the given length. */
-  private static byte[] write(ReservedPath path, int packetLength) {
+  /** The path bytes the HummingbirdRequestPath writes for one packet of the given length. */
+  private static byte[] write(HummingbirdRequestPath path, int packetLength) {
     ByteBuffer buffer = ByteBuffer.allocate(path.getRawPath().length);
     path.writePath(buffer, packetLength);
     assertFalse(buffer.hasRemaining(), "writePath must write exactly getRawPath().length bytes");
@@ -152,7 +156,7 @@ class ReservedPathTest {
     for (int i = 0; i < 4; i++) {
       macs[i] = Arrays.copyOfRange(go, go.length - 24 + 6 * i, go.length - 18 + 6 * i);
     }
-    assertArrayEquals(go, ReservedPath.serializeReverseReservation(flyovers, ias, macs));
+    assertArrayEquals(go, HummingbirdRequestPath.serializeReverseReservation(flyovers, ias, macs));
   }
 
   /** The synthetic Ak of the Go vector: 0x10 * n, 0x10 * n + 1, ... */
@@ -185,8 +189,8 @@ class ReservedPathTest {
   /** The option goes once, and carries the flyovers and the SCION MACs of the reverse path. */
   @Test
   void testReverseReservation() {
-    ReservedPath forward = new ReservedPath(tiny4Path(), new Flyover[4]);
-    ReservedPath path = forward.withReverseReservation(goReverseFlyovers());
+    HummingbirdRequestPath forward = new HummingbirdRequestPath(tiny4Path(), new Flyover[4]);
+    HummingbirdRequestPath path = forward.withReverseReservation(goReverseFlyovers());
 
     byte[] option = path.getEndToEndOptions();
     assertEquals(3, option[0]); // the Go prototype's ReversePath
@@ -206,9 +210,27 @@ class ReservedPathTest {
     assertNull(forward.getEndToEndOptions()); // the original path has none
   }
 
+  /** A copy goes to another host or port; the reverse reservation stays with the original. */
+  @Test
+  void testCopy() {
+    HummingbirdRequestPath path =
+        new HummingbirdRequestPath(tiny4Path(), new Flyover[4])
+            .withReverseReservation(goReverseFlyovers());
+    HummingbirdRequestPath copy =
+        (HummingbirdRequestPath) path.copy(InetAddress.getLoopbackAddress(), 9999);
+    assertEquals(9999, copy.getRemotePort());
+    assertEquals(5, copy.getPathType());
+    assertNull(copy.getEndToEndOptions());
+    assertNotNull(path.getEndToEndOptions());
+    // One authenticator for both: the counter goes on from the original to the copy.
+    int first = HummingbirdPathRaw.create(ByteBuffer.wrap(write(path, 100))).getCounter();
+    int second = HummingbirdPathRaw.create(ByteBuffer.wrap(write(copy, 100))).getCounter();
+    assertEquals(first + 1, second);
+  }
+
   @Test
   void testReverseReservationRejects() {
-    ReservedPath forward = new ReservedPath(tiny4Path(), new Flyover[4]);
+    HummingbirdRequestPath forward = new HummingbirdRequestPath(tiny4Path(), new Flyover[4]);
     Flyover[] wrong = goReverseFlyovers();
     wrong[1] = new Flyover(2, 1, 2, 100, 1786710200L, 60, goAk(2)); // the forward direction
     assertThrows(IllegalArgumentException.class, () -> forward.withReverseReservation(wrong));
@@ -225,8 +247,9 @@ class ReservedPathTest {
     long start = System.currentTimeMillis() / 1000 - 10;
     Flyover[] flyovers = new Flyover[4];
     flyovers[0] = new Flyover(0, 1, 1, 1023, start, 60, AK); // AS 112, 0>1
-    ReservedPath path =
-        new ReservedPath(tiny4Path(), flyovers).withReverseReservation(goReverseFlyovers());
+    HummingbirdRequestPath path =
+        new HummingbirdRequestPath(tiny4Path(), flyovers)
+            .withReverseReservation(goReverseFlyovers());
 
     List<byte[]> sent = new ArrayList<>();
     MockDatagramChannel mock = MockDatagramChannel.open();
