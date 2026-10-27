@@ -69,11 +69,23 @@ class HummingbirdReceiveTest {
     }
   }
 
+  /** Option 3 of a hop-by-hop header is not Go's ReversePath: the reply goes best effort. */
+  @Test
+  void testHopByHopOption3() throws IOException {
+    Path reply = receive(200, HummingbirdResponsePathTest.REVERSE_RESERVATION);
+    assertEquals(0, ((HummingbirdResponsePath) reply).getReservationExpiry());
+  }
+
+  private static Path receive(byte[] reverse) throws IOException {
+    return receive(201, reverse);
+  }
+
   /**
    * Receives the Go packet in AS 111 and returns the reply path. With {@code reverse}, the packet
-   * carries it as end-to-end option 3 between the path and the UDP header, as a Go client does.
+   * carries it as option 3 between the path and the UDP header, in an extension header of type
+   * {@code extHdr}: 201 (end-to-end) as a Go client does, or 200 (hop-by-hop).
    */
-  private static Path receive(byte[] reverse) throws IOException {
+  private static Path receive(int extHdr, byte[] reverse) throws IOException {
     // Next header, length in 4-byte lines minus one, option type and data length, padding to 4
     int pad = (4 - (4 + (reverse == null ? 0 : reverse.length)) % 4) % 4;
     int extLen = reverse == null ? 0 : 4 + reverse.length + pad;
@@ -83,7 +95,7 @@ class HummingbirdReceiveTest {
           int start = buffer.position();
           buffer.put(HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111);
           if (reverse != null) {
-            buffer.put(start + 4, (byte) 201); // next header: end-to-end extension
+            buffer.put(start + 4, (byte) extHdr); // next header: the extension header
             buffer.putShort(start + 6, (short) (1288 + extLen)); // payload length
             buffer.put((byte) 17).put((byte) (extLen / 4 - 1));
             buffer.put((byte) 3).put((byte) reverse.length).put(reverse);

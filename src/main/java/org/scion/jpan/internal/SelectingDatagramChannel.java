@@ -93,13 +93,15 @@ public class SelectingDatagramChannel extends ScionDatagramChannel {
             // Check for extension headers: SCMP errors are sometimes wrapped in one, and a Go
             // Hummingbird client puts its reverse reservation into one.
             ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
+            // Go's ReversePath is end-to-end option 3; hop-by-hop options are numbered separately.
+            byte[] reverse =
+                hdrType == HeaderConstants.HdrTypes.END_TO_END ? extHdr.getOption(3) : null;
             if (extHdr != null) {
               hdrType = extHdr.nextHdr();
             }
 
             InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);
             ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
-            byte[] reverse = extHdr == null ? null : extHdr.getOption(3); // Go's ReversePath
             if (reverse != null && path instanceof HummingbirdResponsePath) {
               path = ((HummingbirdResponsePath) path).acceptReverseReservation(reverse);
             }

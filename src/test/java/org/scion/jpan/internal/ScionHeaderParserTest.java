@@ -271,6 +271,40 @@ class ScionHeaderParserTest {
     }
   }
 
+  /**
+   * Any SCION packet, not only a Hummingbird one, may carry an extension header between its path
+   * and the UDP header. The parser skips it and reads what it reads without one.
+   */
+  @Test
+  void testSkipsExtensionHeader() {
+    int hdrLen = ScionHeaderParser.extractHeaderLength(ByteBuffer.wrap(packetBytes));
+    byte[] ext = {17, 0, 0, 0}; // UDP follows, (0 + 1) * 4 bytes long, two Pad1
+    ByteBuffer data = ByteBuffer.allocate(packetBytes.length + ext.length);
+    data.put(packetBytes, 0, hdrLen).put(ext).put(packetBytes, hdrLen, packetBytes.length - hdrLen);
+    data.put(4, (byte) 201); // next header: end-to-end extension
+    data.putShort(6, (short) (data.getShort(6) + ext.length)); // payload length
+    data.flip();
+    ByteBuffer plain = ByteBuffer.wrap(packetBytes);
+
+    assertNull(ScionHeaderParser.validate(data.asReadOnlyBuffer()));
+    assertEquals(
+        ScionHeaderParser.extractPathHeaderPosition(plain),
+        ScionHeaderParser.extractPathHeaderPosition(data));
+    ByteBuffer expected = ByteBuffer.allocate(packetBytes.length);
+    ByteBuffer actual = ByteBuffer.allocate(packetBytes.length);
+    ScionHeaderParser.extractUserPayload(plain, expected);
+    ScionHeaderParser.extractUserPayload(data, actual);
+    assertArrayEquals(expected.array(), actual.array());
+    InetSocketAddress firstHop = new InetSocketAddress("127.0.0.1", 31000);
+    assertEquals(
+        ScionHeaderParser.extractResponsePath(plain, firstHop).getRemotePort(),
+        ScionHeaderParser.extractResponsePath(data, firstHop).getRemotePort());
+    // what the Shim forwards to
+    assertEquals(
+        ScionHeaderParser.extractDestinationSocketAddress(plain),
+        ScionHeaderParser.extractDestinationSocketAddress(data));
+  }
+
   @Test
   void validateScmpError() {
     {

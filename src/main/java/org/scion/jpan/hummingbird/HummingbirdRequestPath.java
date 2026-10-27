@@ -46,8 +46,8 @@ public class HummingbirdRequestPath extends Path {
    * @param flyovers one slot per hop field, slot 0 is the local AS. null where there is no
    *     reservation, and an empty array for none at all
    * @throws IllegalStateException if {@code scionPath} is not a {@link RequestPath}
-   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS,
-   *     or the flyovers do not match it
+   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS, or
+   *     the flyovers do not match it
    */
   public HummingbirdRequestPath(Path scionPath, Flyover[] flyovers) {
     super(

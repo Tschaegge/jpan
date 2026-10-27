@@ -14,7 +14,9 @@
 
 package org.scion.jpan.internal.header;
 
-import java.net.*;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import org.scion.jpan.Constants;
 import org.scion.jpan.ResponsePath;
@@ -35,19 +37,8 @@ public class ScionHeaderParser {
    * @param userBuffer Buffer in which to write the user payload.
    */
   public static void extractUserPayload(ByteBuffer data, ByteBuffer userBuffer) {
-    int i1 = data.getInt(4);
-    int hdrLen = ByteUtil.readInt(i1, 8, 8);
-    int hdrLenBytes = hdrLen * 4;
-
     int udpHeaderLength = 8;
-    int payLoadStart = hdrLenBytes + udpHeaderLength;
-    int nextHeader = ByteUtil.readInt(i1, 0, 8);
-    if (nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
-        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code()) {
-      // The UDP header follows the extension header, whose second byte is its length in 4-byte
-      // lines minus one.
-      payLoadStart += (ByteUtil.toUnsigned(data.get(hdrLenBytes + 1)) + 1) * 4;
-    }
+    int payLoadStart = extractL4Offset(data, 0) + udpHeaderLength;
     int pos = data.position();
     data.position(payLoadStart);
     int maxUserLen = userBuffer.remaining();
@@ -85,8 +76,6 @@ public class ScionHeaderParser {
 
     int i1 = data.getInt(4);
     int i2 = data.getInt(8);
-    int nextHeader = ByteUtil.readInt(i1, 0, 8);
-    HeaderConstants.HdrTypes hdrType = HeaderConstants.HdrTypes.parse(nextHeader);
     int hdrLen = ByteUtil.readInt(i1, 8, 8);
     int hdrLenBytes = hdrLen * 4;
     int dl = ByteUtil.readInt(i2, 10, 2);
@@ -136,15 +125,11 @@ public class ScionHeaderParser {
     }
 
     // get remote port from UDP or SCMP payload, which may follow an extension header
-    int l4Offset = hdrLenBytes;
-    if (hdrType == HeaderConstants.HdrTypes.HOP_BY_HOP
-        || hdrType == HeaderConstants.HdrTypes.END_TO_END) {
-      hdrType = HeaderConstants.HdrTypes.parse(ByteUtil.toUnsigned(data.get(hdrLenBytes)));
-      l4Offset += (ByteUtil.toUnsigned(data.get(hdrLenBytes + 1)) + 1) * 4;
-    }
+    int l4Offset = extractL4Offset(data, 0);
+    HeaderConstants.HdrTypes l4Type = extractL4Type(data, 0);
     data.position(l4Offset);
-    int srcPort = extractSrcPort(data, l4Offset, hdrType);
-    int dstPort = extractDstPort(data, l4Offset, hdrType);
+    int srcPort = extractSrcPort(data, l4Offset, l4Type);
+    int dstPort = extractDstPort(data, l4Offset, l4Type);
 
     // rewind to original offset
     data.position(start);
@@ -177,12 +162,10 @@ public class ScionHeaderParser {
   public static InetSocketAddress extractDestinationSocketAddress(ByteBuffer data) {
     int start = data.position();
 
-    HeaderConstants.HdrTypes hdrType = extractNextHeader(data);
+    // The UDP or SCMP header may follow an extension header
+    HeaderConstants.HdrTypes hdrType = extractL4Type(data, start);
 
-    int i1 = data.getInt(start + 4); // nextHeader, hdrLen, payLoadLen
     int i2 = data.getInt(start + 8); // pathType, dt, dl, st, sl
-    int hdrLen = ByteUtil.readInt(i1, 8, 8);
-    int hdrLenBytes = hdrLen * 4;
     int dl = ByteUtil.readInt(i2, 10, 2);
 
     // Address header
@@ -196,7 +179,7 @@ public class ScionHeaderParser {
     data.position(start + 28);
     byte[] bytesDst = new byte[(dl + 1) * 4];
     data.get(bytesDst);
-    int dstPort = extractDstPort(data, start + hdrLenBytes, hdrType);
+    int dstPort = extractDstPort(data, extractL4Offset(data, start), hdrType);
     if (dstPort < 0) {
       // return null, e.g. for truncated SCMP packets
       return null;
@@ -211,6 +194,42 @@ public class ScionHeaderParser {
       // This should never happen, we create the byte[] ourselves
       throw new ScionRuntimeException(e);
     }
+  }
+
+  /**
+   * Whether the SCION header is followed by an extension header. A packet cannot contain both both
+   * an end-to-end and a hop-by-hop as this fails {@link #validate}.
+   */
+  private static boolean isExtension(int nextHeader) {
+    return nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
+        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code();
+  }
+
+  /**
+   * Where the UDP or SCMP header begins in a packet that begins at {@code start}: right after the
+   * SCION header, or after the extension header that follows it. Expects a validated packet.
+   */
+  private static int extractL4Offset(ByteBuffer data, int start) {
+    int offset = start + ByteUtil.toUnsigned(data.get(start + 5)) * 4;
+    if (isExtension(ByteUtil.toUnsigned(data.get(start + 4)))) {
+      // The second byte of an extension header is its length in 4-byte lines minus one.
+      offset += (ByteUtil.toUnsigned(data.get(offset + 1)) + 1) * 4;
+    }
+    return offset;
+  }
+
+  /**
+   * The type of the UDP or SCMP header in a packet that begins at {@code start}, as the SCION
+   * header or the extension header that follows it names it. Expects a validated packet.
+   */
+  private static HeaderConstants.HdrTypes extractL4Type(ByteBuffer data, int start) {
+    int nextHeader = ByteUtil.toUnsigned(data.get(start + 4));
+    if (isExtension(nextHeader)) {
+      // The first byte of an extension header is the next header.
+      int hdrLenBytes = ByteUtil.toUnsigned(data.get(start + 5)) * 4;
+      nextHeader = ByteUtil.toUnsigned(data.get(start + hdrLenBytes));
+    }
+    return HeaderConstants.HdrTypes.parse(nextHeader);
   }
 
   private static int extractDstPort(
@@ -319,8 +338,7 @@ public class ScionHeaderParser {
     int nextHeader = ByteUtil.toUnsigned(data.get(4));
     if (nextHeader != HeaderConstants.HdrTypes.UDP.code()
         && nextHeader != HeaderConstants.HdrTypes.SCMP.code()
-        && nextHeader != HeaderConstants.HdrTypes.HOP_BY_HOP.code()
-        && nextHeader != HeaderConstants.HdrTypes.END_TO_END.code()) {
+        && !isExtension(nextHeader)) {
       throw new UnsupportedOperationException(
           "This method supports only UDP, SCMP and extension headers");
     }
@@ -450,8 +468,7 @@ public class ScionHeaderParser {
     // TODO validate path
 
     data.position(start + hdrLenBytes);
-    if (nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
-        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code()) {
+    if (isExtension(nextHeader)) {
       // An extension header: its first byte is the next header, the second its length in
       // 4-byte lines minus one. Skip it and validate what follows.
       if (data.remaining() < 2) {
