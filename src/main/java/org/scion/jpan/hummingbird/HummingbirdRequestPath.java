@@ -39,6 +39,16 @@ public class HummingbirdRequestPath extends Path {
   private final byte[] e2eOptions; // the reverse reservation option, null for none
   private boolean e2eOptionsSent; // guarded by this: the option goes with one packet only
 
+  /**
+   * Turns a SCION path into a Hummingbird path that sends with the given reservations.
+   *
+   * @param scionPath a {@link RequestPath} from JPAN's path lookup
+   * @param flyovers one slot per hop field, slot 0 is the local AS. null where there is no
+   *     reservation, and an empty array for none at all
+   * @throws IllegalStateException if {@code scionPath} is not a {@link RequestPath}
+   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS,
+   *     or the flyovers do not match it
+   */
   public HummingbirdRequestPath(Path scionPath, Flyover[] flyovers) {
     super(
         toHummingbird(scionPath, flyovers),

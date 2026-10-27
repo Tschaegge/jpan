@@ -50,9 +50,9 @@ final class FlyoverAuthenticator {
   }
 
   /**
-   * Checks that the flyovers fit a Hummingbird path without flyovers: one slot per hop field, and
-   * every flyover for the interfaces the routers derive its Ak from. An empty array means no
-   * flyovers at all and always fits.
+   * Checks that the interfaces of every flyover match the path given in {@code rawPath}, in travel
+   * direction, and that at a segment change the flyover is in the first hop field of its AS. An
+   * empty array means no flyovers at all and always passes.
    *
    * @throws IllegalArgumentException if they do not fit
    */
@@ -77,6 +77,13 @@ final class FlyoverAuthenticator {
             String.format(
                 "Flyover %d is for %d>%d, the path has %d>%d",
                 i, f.getIngress(), f.getEgress(), in, eg));
+      }
+      // Appendix A.5: at a segment change, both hop fields of the AS have the same interfaces, but
+      // only the first may carry the flyover.
+      if (f != null && path.getCrossOver(i) == 1) {
+        throw new IllegalArgumentException(
+            String.format(
+                "Flyover %d belongs in slot %d, the first hop field of its AS", i, i - 1));
       }
     }
   }
@@ -110,6 +117,8 @@ final class FlyoverAuthenticator {
    * Authenticates the template that was just written to {@code buffer} at {@code start}.
    * Synchronized: counter and the arrays in macs change with every packet.
    *
+   * @param buffer the packet being written, with the template already in it
+   * @param start the position of the template in {@code buffer}
    * @param dstIsdAs the packet's destination ISD and AS
    * @param packetLength the length of the whole packet, header and payload
    */
@@ -128,6 +137,7 @@ final class FlyoverAuthenticator {
       }
       int hop = hopOffsets[i];
 
+      // Appendix A.4: ResStart = BaseTimestamp - ResStartOffset, 0 to 18 h, never in the future.
       int resStartOffset = (int) (now / 1000 - f.getStartTime());
       buffer.putShort(start + hop + 16, (short) resStartOffset);
 

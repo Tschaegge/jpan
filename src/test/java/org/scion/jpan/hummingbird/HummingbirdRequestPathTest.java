@@ -130,6 +130,36 @@ class HummingbirdRequestPathTest {
         IllegalStateException.class, () -> new HummingbirdRequestPath(reserved, new Flyover[0]));
   }
 
+  /**
+   * Flyovers that do not fit the tiny4 path 112 -> 110 -> 111 fail when the path is built, not
+   * silently at the routers. Travel direction per hop field: 0>1, 2>1, 2>1, 41>0.
+   */
+  @Test
+  void testRejectsMisplacedFlyovers() {
+    long start = System.currentTimeMillis() / 1000 - 10;
+
+    // AS 112 with the interfaces as its hop field stores them, against travel direction.
+    Flyover[] stored = new Flyover[4];
+    stored[0] = new Flyover(1, 0, 1, 100, start, 60, AK);
+    Exception e =
+        assertThrows(
+            IllegalArgumentException.class, () -> new HummingbirdRequestPath(tiny4Path(), stored));
+    assertEquals("Flyover 0 is for 1>0, the path has 0>1", e.getMessage());
+
+    // AS 110 with the right interfaces, but in its second hop field.
+    Flyover[] second = new Flyover[4];
+    second[2] = new Flyover(2, 1, 1, 100, start, 60, AK);
+    e =
+        assertThrows(
+            IllegalArgumentException.class, () -> new HummingbirdRequestPath(tiny4Path(), second));
+    assertEquals("Flyover 2 belongs in slot 1, the first hop field of its AS", e.getMessage());
+
+    // The same flyover in the first hop field of AS 110 fits.
+    Flyover[] first = new Flyover[4];
+    first[1] = second[2];
+    assertDoesNotThrow(() -> new HummingbirdRequestPath(tiny4Path(), first));
+  }
+
   /** The path bytes the HummingbirdRequestPath writes for one packet of the given length. */
   private static byte[] write(HummingbirdRequestPath path, int packetLength) {
     ByteBuffer buffer = ByteBuffer.allocate(path.getRawPath().length);

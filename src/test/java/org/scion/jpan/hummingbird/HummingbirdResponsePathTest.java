@@ -111,7 +111,9 @@ class HummingbirdResponsePathTest {
 
   @Test
   void testRejects() {
-    HummingbirdResponsePath path = reply().withFlyovers(new Flyover[4]);
+    Flyover[] at111 = new Flyover[4];
+    at111[0] = new Flyover(0, 41, 1, 100, 0, 60, AK);
+    HummingbirdResponsePath path = reply().withFlyovers(at111);
     // Its bytes have flyovers already, inserting them again would shift the hop fields.
     assertThrows(IllegalStateException.class, () -> path.withFlyovers(new Flyover[4]));
     // A flyover for interfaces this path does not use: its Ak would not match at the router.
