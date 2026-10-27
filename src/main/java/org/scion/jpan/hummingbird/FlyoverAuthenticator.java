@@ -88,18 +88,6 @@ final class FlyoverAuthenticator {
     }
   }
 
-  /** Unix seconds at which the first of the flyovers ends, 0 if there is none. */
-  long expiry() {
-    long expiry = 0;
-    for (Flyover f : flyovers) {
-      if (f != null) {
-        long end = f.getStartTime() + f.getDuration();
-        expiry = expiry == 0 ? end : Math.min(expiry, end);
-      }
-    }
-    return expiry;
-  }
-
   /** Inserts a flyover hop field for every non-null slot of {@code flyovers}. */
   static byte[] insertFlyovers(byte[] path, Flyover[] flyovers) {
     for (int i = 0; i < flyovers.length; i++) {

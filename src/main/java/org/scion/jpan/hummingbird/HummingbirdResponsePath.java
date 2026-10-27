@@ -16,18 +16,12 @@ package org.scion.jpan.hummingbird;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import org.scion.jpan.Path;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.internal.header.HeaderConstants;
-import org.scion.jpan.internal.util.ByteUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class HummingbirdResponsePath extends ResponsePath {
-
-  private static final Logger log = LoggerFactory.getLogger(HummingbirdResponsePath.class);
 
   private final FlyoverAuthenticator authenticator; // null: no flyovers
 
@@ -63,31 +57,6 @@ public class HummingbirdResponsePath extends ResponsePath {
     this.authenticator = authenticator;
   }
 
-  /** Unix seconds at which the first of this reply's flyovers ends, 0 without flyovers. */
-  public long getReservationExpiry() {
-    return authenticator == null ? 0 : authenticator.expiry();
-  }
-
-  /**
-   * Whether a cache of reply paths should keep {@code cached} instead of replacing it with {@code
-   * received}: when {@code cached} still has a running reservation and {@code received} has none. A
-   * sender offers its reverse reservation with one packet only, as the Go prototype's
-   * HummReplyPather assumes too, so the packets after it must not replace that reply path.
-   *
-   * @param nowSeconds the current time in Unix seconds
-   */
-  public static boolean keepsReservation(Path cached, Path received, long nowSeconds) {
-    if (!(cached instanceof HummingbirdResponsePath)) {
-      return false;
-    }
-    long cachedExpiry = ((HummingbirdResponsePath) cached).getReservationExpiry();
-    long receivedExpiry =
-        received instanceof HummingbirdResponsePath
-            ? ((HummingbirdResponsePath) received).getReservationExpiry()
-            : 0;
-    return cachedExpiry > nowSeconds && receivedExpiry == 0;
-  }
-
   /**
    * Returns this reply with flyovers, to reply with reservations. This path stays unchanged. Build
    * it once and reuse it for every reply: creating it sets up a cipher per flyover.
@@ -109,64 +78,6 @@ public class HummingbirdResponsePath extends ResponsePath {
         getRemoteAddress(),
         getRemotePort(),
         new FlyoverAuthenticator(template, flyovers));
-  }
-
-  /**
-   * Returns this reply with the flyovers the sender offered for it, in the Go prototype's
-   * end-to-end option ReversePath (type 3). This path stays unchanged. The data comes from the
-   * network, so unlike {@link #withFlyovers}, data that does not fit this path is not an error: the
-   * reply then goes without flyovers, best effort.
-   *
-   * @param optData the option's data, as {@link HummingbirdRequestPath#withReverseReservation} or
-   *     BuildReverseReservationExtn in the Go prototype's pkg/hummingbird/reverse.go writes it
-   */
-  public HummingbirdResponsePath acceptReverseReservation(byte[] optData) {
-    try {
-      return this.withFlyovers(parseReverseReservation(optData));
-    } catch (IllegalArgumentException
-        | UnsupportedOperationException
-        | BufferUnderflowException e) {
-      log.warn("Could not create a response with reservations");
-      return this;
-    }
-  }
-
-  /**
-   * Reads the hops of a serialized Go reservation (serializeHops in pkg/snet/path/hummingbird.go):
-   * the hop count, a bitset of the hops that exist, one of the hops with a flyover, then 12 bytes
-   * per hop plus 28 per flyover. The SCION MACs after that are not needed, the reversed path has
-   * them.
-   */
-  static Flyover[] parseReverseReservation(byte[] optData) {
-    ByteBuffer bb = ByteBuffer.wrap(optData);
-    int hops = ByteUtil.toUnsigned(bb.get());
-    if (hops > 8) {
-      // More hops need bitsets longer than one byte.
-      throw new UnsupportedOperationException("Reverse reservation with " + hops + " hops");
-    }
-    int exists = ByteUtil.toUnsigned(bb.get()); // bit i is hop i
-    int hasFlyover = ByteUtil.toUnsigned(bb.get());
-    Flyover[] flyovers = new Flyover[hops];
-    for (int i = 0; i < hops; i++) {
-      if (((exists >> i) & 1) == 0) {
-        continue;
-      }
-      bb.getLong(); // the AS, not needed
-      int ingress = ByteUtil.toUnsigned(bb.getShort());
-      int egress = ByteUtil.toUnsigned(bb.getShort());
-      if (((hasFlyover >> i) & 1) == 0) {
-        continue;
-      }
-      int resIdBw = bb.getInt();
-      byte[] ak = new byte[16];
-      bb.get(ak);
-      long startTime = bb.getInt() & 0xFFFFFFFFL;
-      int duration = ByteUtil.toUnsigned(bb.getShort());
-      bb.getShort(); // unused: Go reserves 4 bytes for the duration but writes 2
-      flyovers[i] =
-          new Flyover(ingress, egress, resIdBw >>> 10, resIdBw & 0x3FF, startTime, duration, ak);
-    }
-    return flyovers;
   }
 
   @Override

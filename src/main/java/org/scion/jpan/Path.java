@@ -67,16 +67,6 @@ public abstract class Path {
     buffer.put(pathRaw);
   }
 
-  /**
-   * End-to-end extension options for the packet that is being built, encoded as type, data length
-   * and data each, or null for none. The channel calls this once per packet, before {@link
-   * #writePath}, and puts the options into an end-to-end extension header between the path and the
-   * UDP or SCMP header.
-   */
-  public byte[] getEndToEndOptions() {
-    return null;
-  }
-
   public InetSocketAddress getFirstHopAddress() {
     return firstHop;
   }

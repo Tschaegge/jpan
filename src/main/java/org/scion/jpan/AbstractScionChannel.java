@@ -24,7 +24,6 @@ import java.nio.channels.DatagramChannel;
 import java.nio.channels.NotYetConnectedException;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
-import org.scion.jpan.hummingbird.HummingbirdResponsePath;
 import org.scion.jpan.internal.*;
 import org.scion.jpan.internal.bootstrap.LocalAS;
 import org.scion.jpan.internal.header.ExtensionHeader;
@@ -517,18 +516,10 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
       // Check for extension headers: SCMP errors are sometimes wrapped in one, and a Go
       // Hummingbird client puts its reverse reservation into one.
-      ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
-      // Go's ReversePath is end-to-end option 3; hop-by-hop options are numbered separately.
-      byte[] reverse = hdrType == HeaderConstants.HdrTypes.END_TO_END ? extHdr.getOption(3) : null;
-      if (extHdr != null) {
-        hdrType = extHdr.nextHdr();
-      }
+      hdrType = receiveExtensionHeader(buffer, hdrType);
 
       InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);
       ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
-      if (reverse != null && path instanceof HummingbirdResponsePath) {
-        path = ((HummingbirdResponsePath) path).acceptReverseReservation(reverse);
-      }
       if (hdrType.code() == expectedHdrTypeId) {
         return path;
       } else if (hdrType == HeaderConstants.HdrTypes.SCMP) {
@@ -564,27 +555,16 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
 
   protected static HeaderConstants.HdrTypes receiveExtensionHeader(
       ByteBuffer buffer, HeaderConstants.HdrTypes hdrType) {
-    ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
-    return extHdr == null ? hdrType : extHdr.nextHdr();
-  }
-
-  /**
-   * Consumes the extension header, if the packet has one.
-   *
-   * @return the extension header, or null if hdrType is not an extension header
-   */
-  protected static ExtensionHeader consumeExtensionHeader(
-      ByteBuffer buffer, HeaderConstants.HdrTypes hdrType) {
-    if (hdrType != HeaderConstants.HdrTypes.END_TO_END
-        && hdrType != HeaderConstants.HdrTypes.HOP_BY_HOP) {
-      return null;
+    if (hdrType == HeaderConstants.HdrTypes.END_TO_END
+        || hdrType == HeaderConstants.HdrTypes.HOP_BY_HOP) {
+      ExtensionHeader extHdr = ExtensionHeader.consume(buffer);
+      // The options are skipped; behind them we expect SCMP or UDP
+      hdrType = extHdr.nextHdr();
+      if (hdrType != HeaderConstants.HdrTypes.SCMP && hdrType != HeaderConstants.HdrTypes.UDP) {
+        throw new UnsupportedOperationException("Extension header not supported: " + hdrType);
+      }
     }
-    ExtensionHeader extHdr = ExtensionHeader.consume(buffer);
-    HeaderConstants.HdrTypes next = extHdr.nextHdr();
-    if (next != HeaderConstants.HdrTypes.SCMP && next != HeaderConstants.HdrTypes.UDP) {
-      throw new UnsupportedOperationException("Extension header not supported: " + next);
-    }
-    return extHdr;
+    return hdrType;
   }
 
   protected void receiveScmp(ByteBuffer buffer, ResponsePath path) throws IOException {
@@ -876,27 +856,21 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       }
 
       byte[] rawPath = path.getRawPath();
-      // Options for an end-to-end extension header between the path and hdrTypeId, or null
-      byte[] e2eOptions = path.getEndToEndOptions();
-      int extLength = e2eOptions == null ? 0 : ExtensionHeader.length(e2eOptions);
       ScionHeaderParser.write(
           buffer,
-          extLength + payloadLength,
+          payloadLength,
           rawPath.length,
           path.getPathType(),
           path.getLocalIsdAs(),
           srcAddress.getAddress(),
           path.getRemoteIsdAs(),
           path.getRemoteAddress().getAddress(),
-          e2eOptions == null ? hdrTypeId : HeaderConstants.HdrTypes.END_TO_END.code(),
+          hdrTypeId,
           cfgTrafficClass);
 
       // Paths with flyovers need the packet length for their MACs
-      int packetLength = buffer.position() + rawPath.length + extLength + payloadLength;
+      int packetLength = buffer.position() + rawPath.length + payloadLength;
       path.writePath(buffer, packetLength);
-      if (e2eOptions != null) {
-        ExtensionHeader.write(buffer, hdrTypeId, e2eOptions);
-      }
     }
   }
 

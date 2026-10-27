@@ -47,33 +47,19 @@ class HummingbirdReceiveTest {
     assertEquals(ROUTER_111, reply.getFirstHopAddress());
   }
 
-  /** The packet carries Go's ReversePath option, so the reply gets its flyovers. */
+  /**
+   * The packet carries Go's ReversePath option in an extension header. JPAN does not read the
+   * option: the packet arrives and the reply goes best effort.
+   */
   @Test
-  void testReceiveReverseReservation() throws IOException {
-    Path reply = receive(HummingbirdResponsePathTest.REVERSE_RESERVATION);
-    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reply.getRawPath()));
-    for (int i : new int[] {0, 1, 3}) {
-      assertTrue(path.getHopField(i).isFlyover(), "hop " + i);
+  void testReceiveWithExtension() throws IOException {
+    for (int extHdr : new int[] {200, 201}) {
+      Path reply = receive(extHdr, HummingbirdResponsePathTest.REVERSE_RESERVATION);
+      HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reply.getRawPath()));
+      for (int i = 0; i < path.getHopFieldCount(); i++) {
+        assertFalse(path.getHopField(i).isFlyover(), "header " + extHdr + ", hop " + i);
+      }
     }
-  }
-
-  /** An option that does not fit the path: the packet still arrives, the reply goes best effort. */
-  @Test
-  void testReceiveBrokenReverseReservation() throws IOException {
-    byte[] broken = HummingbirdResponsePathTest.REVERSE_RESERVATION.clone();
-    broken[0] = 3; // 3 hop fields, the path has 4
-    Path reply = receive(broken);
-    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(reply.getRawPath()));
-    for (int i = 0; i < path.getHopFieldCount(); i++) {
-      assertFalse(path.getHopField(i).isFlyover(), "hop " + i);
-    }
-  }
-
-  /** Option 3 of a hop-by-hop header is not Go's ReversePath: the reply goes best effort. */
-  @Test
-  void testHopByHopOption3() throws IOException {
-    Path reply = receive(200, HummingbirdResponsePathTest.REVERSE_RESERVATION);
-    assertEquals(0, ((HummingbirdResponsePath) reply).getReservationExpiry());
   }
 
   private static Path receive(byte[] reverse) throws IOException {

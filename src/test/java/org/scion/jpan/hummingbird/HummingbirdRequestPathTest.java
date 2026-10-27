@@ -16,23 +16,17 @@ package org.scion.jpan.hummingbird;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.scion.jpan.PackageVisibilityHelper;
 import org.scion.jpan.RequestPath;
-import org.scion.jpan.Scion;
-import org.scion.jpan.ScionDatagramChannel;
 import org.scion.jpan.ScionUtil;
 import org.scion.jpan.internal.header.HummingbirdMac;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.ExamplePacket;
-import org.scion.jpan.testutil.MockDatagramChannel;
 
 /**
  * Checks the path bytes a HummingbirdRequestPath writes for each packet: fresh timestamps and, for
@@ -168,36 +162,6 @@ class HummingbirdRequestPathTest {
     return buffer.array();
   }
 
-  /** Byte for byte what the Go prototype writes, the vector HummingbirdResponsePathTest parses. */
-  @Test
-  void testSerializeReverseReservation() {
-    byte[] go = HummingbirdResponsePathTest.REVERSE_RESERVATION;
-    Flyover[] flyovers = new Flyover[4];
-    flyovers[0] = new Flyover(0, 41, 1, 100, 1786710200L, 60, goAk(1));
-    flyovers[1] = new Flyover(1, 2, 2, 100, 1786710200L, 60, goAk(2));
-    flyovers[3] = new Flyover(1, 0, 3, 100, 1786710200L, 60, goAk(3));
-    long[] ias = {
-      ScionUtil.parseIA("1-ff00:0:111"),
-      ScionUtil.parseIA("1-ff00:0:110"),
-      ScionUtil.parseIA("1-ff00:0:110"),
-      ScionUtil.parseIA("1-ff00:0:112")
-    };
-    byte[][] macs = new byte[4][];
-    for (int i = 0; i < 4; i++) {
-      macs[i] = Arrays.copyOfRange(go, go.length - 24 + 6 * i, go.length - 18 + 6 * i);
-    }
-    assertArrayEquals(go, HummingbirdRequestPath.serializeReverseReservation(flyovers, ias, macs));
-  }
-
-  /** The synthetic Ak of the Go vector: 0x10 * n, 0x10 * n + 1, ... */
-  private static byte[] goAk(int n) {
-    byte[] ak = new byte[16];
-    for (int j = 0; j < 16; j++) {
-      ak[j] = (byte) (0x10 * n + j);
-    }
-    return ak;
-  }
-
   /**
    * The SCION path 112 -> 110 -> 111 the Go sender started from, the path of the Go vector:
    * forwardScionPath in corpus/golden/reverse_reservation_extn.json of hbird-conformance.
@@ -207,115 +171,18 @@ class HummingbirdRequestPathTest {
           "000020800000bbfe6a7f08be0100e85c6a7f08b9003f00010000e3fcf2dbcd93003f000000025d7b73e0d131"
               + "003f00000001c47cf0e2eb51003f00290000a9be1d3a07e6");
 
-  /** The reverse flyovers of the Go vector, for 111 -> 110 -> 112. */
-  private static Flyover[] goReverseFlyovers() {
-    Flyover[] reverse = new Flyover[4];
-    reverse[0] = new Flyover(0, 41, 1, 100, 1786710200L, 60, goAk(1));
-    reverse[1] = new Flyover(1, 2, 2, 100, 1786710200L, 60, goAk(2));
-    reverse[3] = new Flyover(1, 0, 3, 100, 1786710200L, 60, goAk(3));
-    return reverse;
-  }
-
-  /** The option goes once, and carries the flyovers and the SCION MACs of the reverse path. */
-  @Test
-  void testReverseReservation() {
-    HummingbirdRequestPath forward = new HummingbirdRequestPath(tiny4Path(), new Flyover[4]);
-    HummingbirdRequestPath path = forward.withReverseReservation(goReverseFlyovers());
-
-    byte[] option = path.getEndToEndOptions();
-    assertEquals(3, option[0]); // the Go prototype's ReversePath
-    assertEquals(147, option[1] & 0xFF);
-    byte[] data = Arrays.copyOfRange(option, 2, option.length);
-    Flyover[] parsed = HummingbirdResponsePath.parseReverseReservation(data);
-    assertNull(parsed[2]);
-    assertEquals(41, parsed[0].getEgress());
-    assertEquals(3, parsed[3].getResID());
-    // The reverse path's SCION MACs, as Go wrote them for the same path
-    byte[] go = HummingbirdResponsePathTest.REVERSE_RESERVATION;
-    assertArrayEquals(
-        Arrays.copyOfRange(go, go.length - 24, go.length),
-        Arrays.copyOfRange(data, data.length - 24, data.length));
-
-    assertNull(path.getEndToEndOptions()); // only once
-    assertNull(forward.getEndToEndOptions()); // the original path has none
-  }
-
-  /** A copy goes to another host or port; the reverse reservation stays with the original. */
+  /** A copy goes to another host or port with the same path and authenticator. */
   @Test
   void testCopy() {
-    HummingbirdRequestPath path =
-        new HummingbirdRequestPath(tiny4Path(), new Flyover[4])
-            .withReverseReservation(goReverseFlyovers());
+    HummingbirdRequestPath path = new HummingbirdRequestPath(tiny4Path(), new Flyover[4]);
     HummingbirdRequestPath copy =
         (HummingbirdRequestPath) path.copy(InetAddress.getLoopbackAddress(), 9999);
     assertEquals(9999, copy.getRemotePort());
     assertEquals(5, copy.getPathType());
-    assertNull(copy.getEndToEndOptions());
-    assertNotNull(path.getEndToEndOptions());
     // One authenticator for both: the counter goes on from the original to the copy.
     int first = HummingbirdPathRaw.create(ByteBuffer.wrap(write(path, 100))).getCounter();
     int second = HummingbirdPathRaw.create(ByteBuffer.wrap(write(copy, 100))).getCounter();
     assertEquals(first + 1, second);
-  }
-
-  @Test
-  void testReverseReservationRejects() {
-    HummingbirdRequestPath forward = new HummingbirdRequestPath(tiny4Path(), new Flyover[4]);
-    Flyover[] wrong = goReverseFlyovers();
-    wrong[1] = new Flyover(2, 1, 2, 100, 1786710200L, 60, goAk(2)); // the forward direction
-    assertThrows(IllegalArgumentException.class, () -> forward.withReverseReservation(wrong));
-    assertThrows(
-        IllegalArgumentException.class, () -> forward.withReverseReservation(new Flyover[3]));
-  }
-
-  /**
-   * Through a channel: the first packet carries the extension header, the second does not, and the
-   * flyover MAC of the first covers the packet with its extension header.
-   */
-  @Test
-  void testSendReverseReservation() throws IOException {
-    long start = System.currentTimeMillis() / 1000 - 10;
-    Flyover[] flyovers = new Flyover[4];
-    flyovers[0] = new Flyover(0, 1, 1, 1023, start, 60, AK); // AS 112, 0>1
-    HummingbirdRequestPath path =
-        new HummingbirdRequestPath(tiny4Path(), flyovers)
-            .withReverseReservation(goReverseFlyovers());
-
-    List<byte[]> sent = new ArrayList<>();
-    MockDatagramChannel mock = MockDatagramChannel.open();
-    mock.setSendCallback(
-        (buffer, address) -> {
-          byte[] packet = new byte[buffer.remaining()];
-          buffer.get(packet);
-          sent.add(packet);
-          return packet.length;
-        });
-    try (Scion.CloseableService service =
-            Scion.newServiceWithTopologyFile("topologies/tiny4/ASff00_0_112/topology.json");
-        ScionDatagramChannel channel = ScionDatagramChannel.open(service, mock)) {
-      channel.bind(new InetSocketAddress("127.0.0.1", 44444));
-      channel.send(ByteBuffer.wrap("hello".getBytes()), path);
-      channel.send(ByteBuffer.wrap("hello".getBytes()), path);
-    }
-
-    ByteBuffer first = ByteBuffer.wrap(sent.get(0));
-    assertEquals(201, first.get(4) & 0xFF); // end-to-end extension
-    assertEquals(17, ByteBuffer.wrap(sent.get(1)).get(4)); // UDP: the option went only once
-    assertEquals(sent.get(1).length + 152, sent.get(0).length);
-
-    // AS 112's aggregated MAC in the first packet, over the packet length with the extension
-    int pathStart = 36; // 12 common header, 16 ISD-AS, 4 + 4 IPv4 addresses
-    int hop =
-        pathStart
-            + HummingbirdPathRaw.create(ByteBuffer.wrap(path.getRawPath())).getHopFieldOffset(0);
-    int resStartOffset = first.getShort(hop + 16) & 0xFFFF;
-    byte[] vk =
-        new HummingbirdMac(AK)
-            .flyoverMac(DST_ISD_AS, first.limit(), resStartOffset, first.getInt(pathStart + 8));
-    byte[] scionMac = Arrays.copyOfRange(TINY4_PATH, 4 + 16 + 6, 4 + 16 + 12); // hop 0
-    for (int i = 0; i < HummingbirdMac.MAC_LEN; i++) {
-      assertEquals((byte) (scionMac[i] ^ vk[i]), first.get(hop + 6 + i), "AggMAC byte " + i);
-    }
   }
 
   private static RequestPath tiny4Path() {
