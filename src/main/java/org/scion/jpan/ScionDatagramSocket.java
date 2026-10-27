@@ -25,6 +25,7 @@ import java.nio.channels.IllegalBlockingModeException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import org.scion.jpan.hummingbird.HummingbirdResponsePath;
 import org.scion.jpan.internal.*;
 import org.scion.jpan.internal.util.SimpleCache;
 import org.scion.jpan.selectors.PathSelector;
@@ -341,7 +342,11 @@ public class ScionDatagramSocket extends java.net.DatagramSocket {
           InetAddress ip = path.getRemoteAddress();
           // TODO this a bit of a security problem, an attacker can send packets from many different
           //   locations (paths) in order to have the cache overflow and forget useful paths.
-          pathCache.put(new InetSocketAddress(ip, path.getRemotePort()), path);
+          InetSocketAddress key = new InetSocketAddress(ip, path.getRemotePort());
+          long now = System.currentTimeMillis() / 1000;
+          if (!HummingbirdResponsePath.keepsReservation(pathCache.get(key), path, now)) {
+            pathCache.put(key, path);
+          }
         }
       }
       receiveBuffer.flip();

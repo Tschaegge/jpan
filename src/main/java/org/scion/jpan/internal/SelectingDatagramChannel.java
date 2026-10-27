@@ -22,6 +22,8 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.util.Iterator;
 import org.scion.jpan.*;
+import org.scion.jpan.hummingbird.HummingbirdResponsePath;
+import org.scion.jpan.internal.header.ExtensionHeader;
 import org.scion.jpan.internal.header.HeaderConstants;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.snap.SnapUnderlay;
@@ -90,10 +92,19 @@ public class SelectingDatagramChannel extends ScionDatagramChannel {
             buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
             // Check for extension headers: SCMP errors are sometimes wrapped in one, and a Go
             // Hummingbird client puts its reverse reservation into one.
-            hdrType = receiveExtensionHeader(buffer, hdrType);
+            ExtensionHeader extHdr = consumeExtensionHeader(buffer, hdrType);
+            // Go's ReversePath is end-to-end option 3; hop-by-hop options are numbered separately.
+            byte[] reverse =
+                hdrType == HeaderConstants.HdrTypes.END_TO_END ? extHdr.getOption(3) : null;
+            if (extHdr != null) {
+              hdrType = extHdr.nextHdr();
+            }
 
             InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);
             ResponsePath path = ScionHeaderParser.extractResponsePath(buffer, firstHopAddress);
+            if (reverse != null && path instanceof HummingbirdResponsePath) {
+              path = ((HummingbirdResponsePath) path).acceptReverseReservation(reverse);
+            }
             if (hdrType == expectedHdrType) {
               return path;
             }
