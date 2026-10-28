@@ -27,8 +27,8 @@ import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.testutil.HummingbirdExamplePacket;
 
 /**
- * Checks the reply path in AS 111 to the packet the Go prototype sent over 112 -> 110 -> 111, with
- * and without flyovers for the reply. The same with real routers is {@code make live} in
+ * Checks the reply path in AS 111 to a packet captured on tiny4 over 112 -> 110 -> 111, with and
+ * without flyovers for the reply. The same with real routers is {@code make live} in
  * hbird-conformance.
  */
 class HummingbirdResponsePathTest {
@@ -43,9 +43,8 @@ class HummingbirdResponsePathTest {
   private static final byte[] AK = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 
   /**
-   * The ReversePath option a Go client sends along for this reply: flyovers for AS 111, 110 and
-   * 112. Made by the Go prototype's BuildReverseReservationExtn, from corpus/golden/
-   * reverse_reservation_extn.json in hbird-conformance. Its Aks are synthetic.
+   * A reverse reservation for this reply (Appendix C), as option data: flyovers for AS 111, 110 and
+   * 112, then the SCION MACs of the reverse path. Its Aks are synthetic.
    */
   static final byte[] REVERSE_RESERVATION =
       fromHex(

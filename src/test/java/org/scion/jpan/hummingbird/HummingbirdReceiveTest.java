@@ -28,8 +28,8 @@ import org.scion.jpan.testutil.HummingbirdExamplePacket;
 import org.scion.jpan.testutil.MockDatagramChannel;
 
 /**
- * Receives a Hummingbird packet through a plain ScionDatagramChannel in AS 111: the packet the Go
- * prototype sent over 112 -> 110 -> 111, with flyovers at all three ASes.
+ * Receives a Hummingbird packet through a plain ScionDatagramChannel in AS 111: a packet captured
+ * on tiny4 over 112 -> 110 -> 111, with flyovers at all three ASes.
  */
 class HummingbirdReceiveTest {
 
@@ -47,8 +47,8 @@ class HummingbirdReceiveTest {
   }
 
   /**
-   * The packet carries Go's ReversePath option in an extension header. JPAN does not read the
-   * option, but skips it: receive checks the payload and the UDP header behind it.
+   * The packet carries a reverse reservation (Appendix C) as an option in an extension header. JPAN
+   * skips the option: receive checks the payload and the UDP header behind it.
    */
   @Test
   void testReceiveWithExtension() throws IOException {
@@ -62,9 +62,9 @@ class HummingbirdReceiveTest {
   }
 
   /**
-   * Receives the Go packet in AS 111 and returns the reply path. With {@code reverse}, the packet
-   * carries it as option 3 between the path and the UDP header, in an extension header of type
-   * {@code extHdr}: 201 (end-to-end) as a Go client does, or 200 (hop-by-hop).
+   * Receives the captured packet in AS 111 and returns the reply path. With {@code reverse}, the
+   * packet carries it as option 3 between the path and the UDP header, in an extension header of
+   * type {@code extHdr}: 201 (end-to-end) or 200 (hop-by-hop).
    */
   private static Path receive(int extHdr, byte[] reverse) throws IOException {
     // Next header, length in 4-byte lines minus one, option type and data length, padding to 4

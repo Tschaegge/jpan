@@ -163,8 +163,8 @@ class HummingbirdRequestPathTest {
   }
 
   /**
-   * The SCION path 112 -> 110 -> 111 the Go sender started from, the path of the Go vector:
-   * forwardScionPath in corpus/golden/reverse_reservation_extn.json of hbird-conformance.
+   * The SCION path 112 -> 110 -> 111 of the packet captured on tiny4: the info and hop fields of
+   * HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111, in SCION's format.
    */
   private static final byte[] TINY4_PATH =
       fromHex(

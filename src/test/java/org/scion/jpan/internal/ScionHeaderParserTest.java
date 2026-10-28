@@ -227,7 +227,7 @@ class ScionHeaderParserTest {
    */
   @Test
   void testResponsePathHummingbird() {
-    // The header captured from the Go prototype, plus the UDP payload it announces
+    // The Hummingbird header captured on tiny4, plus the UDP payload it announces
     byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
     ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
     data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
@@ -251,7 +251,7 @@ class ScionHeaderParserTest {
   @Test
   void validatePathType() {
     {
-      // Hummingbird: the header captured from the Go prototype, plus the UDP payload it announces
+      // Hummingbird: the header captured on tiny4, plus the UDP payload it announces
       byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
       ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
       data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
