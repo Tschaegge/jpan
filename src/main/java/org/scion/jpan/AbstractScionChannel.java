@@ -514,8 +514,8 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       HeaderConstants.HdrTypes hdrType = ScionHeaderParser.extractNextHeader(buffer);
       // From here on we use linear reading using the buffer's position() mechanism
       buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
-      // Check for extension headers: SCMP errors are sometimes wrapped in one, and a Go
-      // Hummingbird client puts its reverse reservation into one.
+      // Check for extension headers: SCMP errors are sometimes wrapped in one, and a client may
+      // put a reverse reservation (Hummingbird, Appendix C) into one.
       hdrType = receiveExtensionHeader(buffer, hdrType);
 
       InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);

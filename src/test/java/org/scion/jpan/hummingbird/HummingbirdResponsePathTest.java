@@ -42,17 +42,6 @@ class HummingbirdResponsePathTest {
 
   private static final byte[] AK = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 
-  /**
-   * A reverse reservation for this reply (Appendix C), as option data: flyovers for AS 111, 110 and
-   * 112, then the SCION MACs of the reverse path. Its Aks are synthetic.
-   */
-  static final byte[] REVERSE_RESERVATION =
-      fromHex(
-          "040b0b0001ff00000001110000002900000464101112131415161718191a1b1c1d1e1f6a7f08b8003c0000"
-              + "0001ff00000001100001000200000864202122232425262728292a2b2c2d2e2f6a7f08b8003c0000"
-              + "0001ff00000001120001000000000c64303132333435363738393a3b3c3d3e3f6a7f08b8003c0000"
-              + "a9be1d3a07e6c47cf0e2eb515d7b73e0d131e3fcf2dbcd93");
-
   /** Without flyovers the reply is written as it was received. */
   @Test
   void testWithoutFlyovers() {
@@ -153,13 +142,5 @@ class HummingbirdResponsePathTest {
         localhost,
         40000,
         new InetSocketAddress("127.0.0.17", 31008));
-  }
-
-  private static byte[] fromHex(String hex) {
-    byte[] out = new byte[hex.length() / 2];
-    for (int i = 0; i < out.length; i++) {
-      out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
-    }
-    return out;
   }
 }

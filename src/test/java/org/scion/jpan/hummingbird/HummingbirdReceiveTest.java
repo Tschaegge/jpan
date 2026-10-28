@@ -47,13 +47,13 @@ class HummingbirdReceiveTest {
   }
 
   /**
-   * The packet carries a reverse reservation (Appendix C) as an option in an extension header. JPAN
-   * skips the option: receive checks the payload and the UDP header behind it.
+   * The packet carries an option in an extension header, as a client may for a reverse reservation
+   * (Appendix C). JPAN skips the option: receive checks the payload and the UDP header behind it.
    */
   @Test
   void testReceiveWithExtension() throws IOException {
     for (int extHdr : new int[] {200, 201}) {
-      receive(extHdr, HummingbirdResponsePathTest.REVERSE_RESERVATION);
+      receive(extHdr, new byte[147]); // the data is only skipped, never read
     }
   }
 
