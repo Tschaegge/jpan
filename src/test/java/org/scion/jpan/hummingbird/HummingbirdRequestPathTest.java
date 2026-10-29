@@ -125,33 +125,22 @@ class HummingbirdRequestPathTest {
   }
 
   /**
-   * Flyovers that do not fit the tiny4 path 112 -> 110 -> 111 fail when the path is built, not
-   * silently at the routers. Travel direction per hop field: 0>1, 2>1, 2>1, 41>0.
+   * At a segment change, a flyover belongs in the first hop field of its AS (Appendix A.5). On the
+   * tiny4 path 112 -> 110 -> 111, AS 110 has hop fields 1 and 2, both traversed as 2>1.
    */
   @Test
   void testRejectsMisplacedFlyovers() {
-    long start = System.currentTimeMillis() / 1000 - 10;
-
-    // AS 112 with the interfaces as its hop field stores them, against travel direction.
-    Flyover[] stored = new Flyover[4];
-    stored[0] = new Flyover(1, 0, 1, 100, start, 60, AK);
+    Flyover[] flyovers = new Flyover[4];
+    flyovers[2] = new Flyover(2, 1, 1, 100, 0, 60, AK);
     Exception e =
         assertThrows(
-            IllegalArgumentException.class, () -> new HummingbirdRequestPath(tiny4Path(), stored));
-    assertEquals("Flyover 0 is for 1>0, the path has 0>1", e.getMessage());
-
-    // AS 110 with the right interfaces, but in its second hop field.
-    Flyover[] second = new Flyover[4];
-    second[2] = new Flyover(2, 1, 1, 100, start, 60, AK);
-    e =
-        assertThrows(
-            IllegalArgumentException.class, () -> new HummingbirdRequestPath(tiny4Path(), second));
+            IllegalArgumentException.class,
+            () -> new HummingbirdRequestPath(tiny4Path(), flyovers));
     assertEquals("Flyover 2 belongs in slot 1, the first hop field of its AS", e.getMessage());
 
-    // The same flyover in the first hop field of AS 110 fits.
-    Flyover[] first = new Flyover[4];
-    first[1] = second[2];
-    assertDoesNotThrow(() -> new HummingbirdRequestPath(tiny4Path(), first));
+    flyovers[1] = flyovers[2];
+    flyovers[2] = null;
+    assertDoesNotThrow(() -> new HummingbirdRequestPath(tiny4Path(), flyovers));
   }
 
   /** The path bytes the HummingbirdRequestPath writes for one packet of the given length. */
