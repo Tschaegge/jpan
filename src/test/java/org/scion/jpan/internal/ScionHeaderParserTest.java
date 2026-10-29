@@ -256,7 +256,7 @@ class ScionHeaderParserTest {
       ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
       data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
       data.rewind();
-      assertNull(ScionHeaderParser.validate(data)); 
+      assertNull(ScionHeaderParser.validate(data));
       data.rewind();
       data.put(8, (byte) 3); // EPIC, which JPAN does not implement
       assertNotNull(ScionHeaderParser.validate(data));
