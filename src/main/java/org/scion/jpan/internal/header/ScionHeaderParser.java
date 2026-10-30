@@ -197,8 +197,8 @@ public class ScionHeaderParser {
   }
 
   /**
-   * Whether the SCION header is followed by an extension header. A packet cannot contain both both
-   * an end-to-end and a hop-by-hop as this fails {@link #validate}.
+   * Whether the SCION header is followed by an extension header. A packet cannot contain both an
+   * end-to-end and a hop-by-hop as this fails {@link #validate}.
    */
   private static boolean isExtension(int nextHeader) {
     return nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
