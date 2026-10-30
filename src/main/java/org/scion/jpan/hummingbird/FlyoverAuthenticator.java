@@ -67,7 +67,7 @@ final class FlyoverAuthenticator {
               "%d flyover slots, the path has %d hop fields",
               flyovers.length, path.getHopFieldCount()));
     }
-    // An Ak only works for its interfaces. With others the routers drop every packet.
+    // The key Ak only works for its interfaces. With others the routers drop every packet.
     for (int i = 0; i < flyovers.length; i++) {
       Flyover f = flyovers[i];
       int in = path.getFlyoverIngress(i);

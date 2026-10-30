@@ -44,7 +44,8 @@ public final class HummingbirdMac {
   private final Cipher akCipher;
   private final byte[] in = new byte[BLOCK_LEN]; // the MAC input, refilled for every packet
   private final ByteBuffer inBuf = ByteBuffer.wrap(in); // a view on in, made once
-  private final byte[] vk = new byte[BLOCK_LEN]; // the flyover MAC, overwritten by every call
+  // The flyover MAC, V_K in the paper (Eq. 3). Overwritten by every call.
+  private final byte[] vk = new byte[BLOCK_LEN];
 
   /**
    * @param ak the flyover's 16 byte authentication key

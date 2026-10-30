@@ -20,8 +20,9 @@ import java.util.Arrays;
 import org.scion.jpan.internal.header.HummingbirdMac;
 
 /**
- * A bandwidth reservation at one AS, with the key Ak that the AS issued for it. The ingress and
- * egress must be the interfaces the packet really uses at that AS, otherwise the router drops it.
+ * A bandwidth reservation at one AS, with its authentication key Ak (A_K in the paper, Eq. 2),
+ * which the AS derives from its secret value and the reservation. The ingress and egress must be
+ * the interfaces the packet really uses at that AS, otherwise the router drops it.
  */
 public final class Flyover {
 
