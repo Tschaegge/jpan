@@ -17,6 +17,7 @@ package org.scion.jpan.hummingbird;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.Timestamp;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.security.GeneralSecurityException;
@@ -61,7 +62,7 @@ public final class MarketplaceClient {
 
   /**
    * For a marketplace with a self-signed certificate, like the test marketplace of a local
-   * topology. *
+   * topology.
    *
    * @param baseUrl for example https://marketplace.local:31888
    * @param jwt the token of the marketplace account, sent with every call
@@ -86,13 +87,18 @@ public final class MarketplaceClient {
   }
 
   /**
-   * The assets for sale at one interface pair of an AS. Only the first page of the results.
+   * The assets for sale at one interface pair of an AS that have the bandwidth for the whole time
+   * window. Only the first page of the results.
    *
    * @param isdAs the AS, as {@link org.scion.jpan.ScionUtil#parseIA} returns it
    * @param ingress interface in travel direction, 0 if the reservation starts in this AS
    * @param egress interface in travel direction, 0 if the reservation ends in this AS
+   * @param bandwidth in kbit/s, not a codepoint
+   * @param startTime absolute Unix seconds
+   * @param duration length of the time window in seconds
    */
-  public List<Marketplace.SearchAsset> searchAssets(long isdAs, int ingress, int egress)
+  public List<Marketplace.SearchAsset> searchAssets(
+      long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
       throws IOException {
     byte[] request =
         Marketplace.SearchAssetsRequest.newBuilder()
@@ -100,6 +106,9 @@ public final class MarketplaceClient {
             .setIa(isdAs)
             .setIfIdIngress(ingress)
             .setIfIdEgress(egress)
+            .setMinRequiredBw(bandwidth)
+            .setStartsAtLatest(Timestamp.newBuilder().setSeconds(startTime).build())
+            .setStopsAtEarliest(Timestamp.newBuilder().setSeconds(startTime + duration).build())
             .build()
             .toByteArray();
     Marketplace.SearchAssetsResponse response =

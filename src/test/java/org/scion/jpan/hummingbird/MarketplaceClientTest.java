@@ -73,8 +73,16 @@ class MarketplaceClientTest {
   }
 
   /**
-   * The answer of the tiny4 marketplace to a search for AS 112 with the pair (0, 1), as captured
-   * with curl: one asset, 1 Gbit/s, valid for 100 days.
+   * A search on tiny4 at AS 112 with the pair (0, 1) for 10 s of 1000 kbit/s from 2026-11-03
+   * 11:29:26 UTC, as captured with curl. It sends ingress 0 as "18 00": 0 means "starts in this
+   * AS", so it must be on the wire.
+   */
+  private static final String SEARCH_REQUEST =
+      "109282808080e07f1800200128e807320608968ba7d7063a0608a08ba7d706";
+
+  /**
+   * The answer of the tiny4 marketplace to an earlier search at AS 112 with the pair (0, 1), as
+   * captured with curl: one asset, 1 Gbit/s, valid for 100 days.
    */
   @Test
   void testSearchAssets() throws Exception {
@@ -82,25 +90,18 @@ class MarketplaceClientTest {
         "0a3a0a080000000000000009109282808080e07f1800200128c0843d300a38c0843d420608fd93edd606"
             + "4a0608fdbffcda06500a580a6080a3056801";
     start(MARKETPLACE_CERT);
-    server.enqueue(
-        new MockResponse()
-            .addHeader("Content-Type", "application/proto")
-            .setBody(new Buffer().write(ByteString.decodeHex(captured))));
+    server.enqueue(protoResponse(captured));
     long ia112 = ScionUtil.parseIA("1-ff00:0:112");
 
-    List<Marketplace.SearchAsset> assets = client(MARKETPLACE_CERT).searchAssets(ia112, 0, 1);
+    List<Marketplace.SearchAsset> assets =
+        client(MARKETPLACE_CERT).searchAssets(ia112, 0, 1, 1000, 1793705366L, 10);
     assertEquals(1, assets.size());
     assertEquals(ia112, assets.get(0).getIa());
     assertEquals(1000000, assets.get(0).getBandwidth());
 
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/SearchAssets", request.getPath());
-    Marketplace.SearchAssetsRequest sent =
-        Marketplace.SearchAssetsRequest.parseFrom(request.getBody().readByteArray());
-    assertEquals(ia112, sent.getIa());
-    assertTrue(sent.hasIfIdIngress()); // 0 means "starts in this AS", so it must be sent
-    assertEquals(0, sent.getIfIdIngress());
-    assertEquals(1, sent.getIfIdEgress());
+    assertArrayEquals(hex(SEARCH_REQUEST), request.getBody().readByteArray()); // the same as curl
   }
 
   /**
