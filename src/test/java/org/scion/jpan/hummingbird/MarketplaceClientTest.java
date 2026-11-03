@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLException;
 import okhttp3.mockwebserver.MockResponse;
@@ -26,8 +27,10 @@ import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
 import okio.Buffer;
+import okio.ByteString;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.scion.jpan.ScionUtil;
 import org.scion.jpan.proto.hummingbird.Marketplace;
 
 /**
@@ -67,6 +70,37 @@ class MarketplaceClientTest {
     assertEquals("application/proto", request.getHeader("Content-Type"));
     assertEquals("Bearer test-jwt", request.getHeader("Authorization"));
     assertEquals(0, request.getBodySize()); // an empty MarketplaceInfoRequest has no bytes
+  }
+
+  /**
+   * The answer of the tiny4 marketplace to a search for AS 112 with the pair (0, 1), as captured
+   * with curl: one asset, 1 Gbit/s, valid for 100 days.
+   */
+  @Test
+  void testSearchAssets() throws Exception {
+    String captured =
+        "0a3a0a080000000000000009109282808080e07f1800200128c0843d300a38c0843d420608fd93edd606"
+            + "4a0608fdbffcda06500a580a6080a3056801";
+    start(MARKETPLACE_CERT);
+    server.enqueue(
+        new MockResponse()
+            .addHeader("Content-Type", "application/proto")
+            .setBody(new Buffer().write(ByteString.decodeHex(captured))));
+    long ia112 = ScionUtil.parseIA("1-ff00:0:112");
+
+    List<Marketplace.SearchAsset> assets = client(MARKETPLACE_CERT).searchAssets(ia112, 0, 1);
+    assertEquals(1, assets.size());
+    assertEquals(ia112, assets.get(0).getIa());
+    assertEquals(1000000, assets.get(0).getBandwidth());
+
+    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+    assertEquals("/proto.hummingbird.v1.MarketplaceService/SearchAssets", request.getPath());
+    Marketplace.SearchAssetsRequest sent =
+        Marketplace.SearchAssetsRequest.parseFrom(request.getBody().readByteArray());
+    assertEquals(ia112, sent.getIa());
+    assertTrue(sent.hasIfIdIngress()); // 0 means "starts in this AS", so it must be sent
+    assertEquals(0, sent.getIfIdIngress());
+    assertEquals(1, sent.getIfIdEgress());
   }
 
   /** The answer of the tiny4 marketplace to a call without a token, as captured with curl. */

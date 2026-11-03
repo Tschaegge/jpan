@@ -22,6 +22,7 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
+import java.util.List;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -81,6 +82,28 @@ public final class MarketplaceClient {
   public Marketplace.MarketplaceInfoResponse info() throws IOException {
     byte[] request = Marketplace.MarketplaceInfoRequest.getDefaultInstance().toByteArray();
     return Marketplace.MarketplaceInfoResponse.parseFrom(post("Info", request));
+  }
+
+  /**
+   * The assets for sale at one interface pair of an AS. Only the first page of the results.
+   *
+   * @param isdAs the AS, as {@link org.scion.jpan.ScionUtil#parseIA} returns it
+   * @param ingress interface in travel direction, 0 if the reservation starts in this AS
+   * @param egress interface in travel direction, 0 if the reservation ends in this AS
+   */
+  public List<Marketplace.SearchAsset> searchAssets(long isdAs, int ingress, int egress)
+      throws IOException {
+    byte[] request =
+        Marketplace.SearchAssetsRequest.newBuilder()
+            .setOwned(false)
+            .setIa(isdAs)
+            .setIfIdIngress(ingress)
+            .setIfIdEgress(egress)
+            .build()
+            .toByteArray();
+    Marketplace.SearchAssetsResponse response =
+        Marketplace.SearchAssetsResponse.parseFrom(post("SearchAssets", request));
+    return response.getAssetsList();
   }
 
   /**
