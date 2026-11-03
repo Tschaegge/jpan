@@ -139,6 +139,19 @@ class MarketplaceClientTest {
   }
 
   /**
+   * The order that curl sent on tiny4 for 10 s of 1000 kbit/s from asset 17, from 2026-11-03
+   * 13:01:01 UTC: the inside of BUY_REQUEST in FlyoverBuyerTest.
+   */
+  @Test
+  void testOrder() {
+    com.google.protobuf.ByteString asset17 =
+        com.google.protobuf.ByteString.copyFrom(hex("0000000000000011"));
+    Marketplace.BuyAsset order = MarketplaceClient.order(asset17, 1000, 1793710861L, 10);
+    assertArrayEquals(
+        hex("0a0800000000000000111206088db6a7d7061a060897b6a7d70620e807"), order.toByteArray());
+  }
+
+  /**
    * Redeeming asset 15 from testBuyAssets on tiny4. The real 16-byte key is replaced by 00 to 0f.
    */
   @Test

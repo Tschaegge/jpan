@@ -117,10 +117,28 @@ public final class MarketplaceClient {
   }
 
   /**
+   * One part of an asset to buy with {@link #buyAssets}.
+   *
+   * @param assetId the asset to buy from, as {@link #searchAssets} returns it
+   * @param bandwidth in kbit/s, not a codepoint
+   * @param startTime absolute Unix seconds
+   * @param duration length of the part in seconds
+   */
+  public static Marketplace.BuyAsset order(
+      ByteString assetId, int bandwidth, long startTime, int duration) {
+    return Marketplace.BuyAsset.newBuilder()
+        .setAssetId(assetId)
+        .setStartsAtExactly(Timestamp.newBuilder().setSeconds(startTime).build())
+        .setStopsAtExactly(Timestamp.newBuilder().setSeconds(startTime + duration).build())
+        .setBandwidthExact(bandwidth)
+        .build();
+  }
+
+  /**
    * Buys parts of assets, all or none: the marketplace buys nothing if one part cannot be bought or
    * the total exceeds maxPrice. Every bought part becomes an asset of its own with a new ID.
    *
-   * @param assets what to buy: the asset ID, the exact time window and the bandwidth in kbit/s
+   * @param assets what to buy, each part made with {@link #order}
    * @param maxPrice the most the whole purchase may cost, in the unit of {@link #info()}
    * @return the IDs of the bought assets, in the order of the request, and the cost
    * @throws IOException also if the marketplace returns fewer assets than requested
