@@ -465,7 +465,13 @@ public class ScionHeaderParser {
         && pathType != HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       return PRE + "Path is not empty but path type is: " + pathType;
     }
-    // TODO validate path
+    if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
+      String pathError = validateHummingbird(path);
+      if (pathError != null) {
+        return PRE + pathError;
+      }
+    }
+    // TODO validate SCION paths (type 1) as well
 
     data.position(start + hdrLenBytes);
     if (isExtension(nextHeader)) {
@@ -487,6 +493,53 @@ public class ScionHeaderParser {
       return validateSCMP(data, start);
     }
     return PRE + "Unsupported header type: " + nextHeader;
+  }
+
+  /**
+   * Checks a Hummingbird path before anything parses it. HummingbirdPathRaw and
+   * HummingbirdPathConverter.reverse rely on the path fitting its own meta header and would throw
+   * otherwise.
+   *
+   * @return why the path is invalid, or null if it is valid
+   */
+  private static String validateHummingbird(byte[] path) {
+    if (path.length < HummingbirdPathRaw.META_LEN) {
+      return "Hummingbird path too short";
+    }
+    int meta = ByteBuffer.wrap(path).getInt(0);
+    int segments = 0;
+    int lines = 0;
+    for (int i = 0; i < 3; i++) {
+      int segLen = ByteUtil.readInt(meta, 11 + 7 * i, 7);
+      if (segLen > 0) {
+        if (segments != i) {
+          return "Hummingbird path with an empty segment in between";
+        }
+        segments++;
+      }
+      lines += segLen;
+    }
+    int hopsStart = HummingbirdPathRaw.META_LEN + segments * HummingbirdPathRaw.INFO_FIELD_LEN;
+    if (path.length != hopsStart + lines * HummingbirdPathRaw.LINE_LEN) {
+      return "Hummingbird path length does not match its meta header";
+    }
+    // Walk the hop fields, 3 lines each or 5 with a flyover. CurrHF must point at the start of one.
+    int currHf = ByteUtil.readInt(meta, 2, 8);
+    boolean currHfFound = false;
+    int line = 0;
+    for (int hops = 0; line < lines; hops++) {
+      if (hops == HummingbirdPathRaw.MAX_HOP_FIELDS) {
+        return "Hummingbird path with too many hop fields";
+      }
+      currHfFound = currHfFound | (line == currHf);
+      boolean flyover = (path[hopsStart + line * HummingbirdPathRaw.LINE_LEN] & 0x80) != 0;
+      line += flyover ? HummingbirdPathRaw.FLYOVER_LINES : HummingbirdPathRaw.HOP_LINES;
+    }
+    // CurrINF also catches a path without hop fields: it has no segment to point at.
+    if (line != lines || !currHfFound || ByteUtil.readInt(meta, 0, 2) >= segments) {
+      return "Hummingbird hop fields do not match the meta header";
+    }
+    return null;
   }
 
   private static String validateUDP(ByteBuffer data, int start) {

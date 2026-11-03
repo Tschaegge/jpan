@@ -272,6 +272,37 @@ class ScionHeaderParserTest {
   }
 
   /**
+   * A Hummingbird path that does not fit its own meta header fails validation. Otherwise the
+   * receive loop would parse it, and extractResponsePath would throw.
+   */
+  @Test
+  void validateHummingbirdPath() {
+    int path = 36; // where the path of the captured header starts
+    int meta = 0x28400; // its first word: CurrINF 0, CurrHF 0, SegLen 10, 8, 0
+    assertNull(ScionHeaderParser.validate(hummingbirdPacket(path, meta)));
+    // SegLen claims 127 lines, the path has 18
+    assertNotNull(ScionHeaderParser.validate(hummingbirdPacket(path, 127 << 14)));
+    // Three segments of 2 lines each: no hop field is 2 lines long
+    assertNotNull(ScionHeaderParser.validate(hummingbirdPacket(path, 2 << 14 | 2 << 7 | 2)));
+    // CurrHF points past the last hop field
+    assertNotNull(ScionHeaderParser.validate(hummingbirdPacket(path, meta | 255 << 22)));
+    // Hop field 3 at byte 80 loses its flyover: 3 lines instead of 5, so 2 lines are left over
+    ByteBuffer data = hummingbirdPacket(path, meta);
+    data.put(path + 80, (byte) (data.get(path + 80) & 0x7F));
+    assertNotNull(ScionHeaderParser.validate(data));
+  }
+
+  /** The Hummingbird header captured on tiny4 with metaWord at path, plus its UDP payload. */
+  private static ByteBuffer hummingbirdPacket(int path, int metaWord) {
+    byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+    ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+    data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+    data.putInt(path, metaWord);
+    data.rewind();
+    return data;
+  }
+
+  /**
    * Any SCION packet, not only a Hummingbird one, may carry an extension header between its path
    * and the UDP header. The parser skips it and reads what it reads without one.
    */
