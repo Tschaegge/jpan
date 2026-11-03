@@ -103,6 +103,50 @@ class MarketplaceClientTest {
     assertEquals(1, sent.getIfIdEgress());
   }
 
+  /**
+   * A purchase on the tiny4 marketplace, as captured with curl: 10 s of 1000 kbit/s from asset 14.
+   */
+  private static final String BUY_REQUEST =
+      "0a1d0a08000000000000000e120608cad7a6d7061a0608d4d7a6d70620e80710a08d06";
+
+  /** The marketplace's answer to BUY_REQUEST: asset 15, cost 10109. */
+  @Test
+  void testBuyAssets() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse("0a0a0a08000000000000000f10fd4e"));
+    Marketplace.BuyAssetsRequest order = Marketplace.BuyAssetsRequest.parseFrom(hex(BUY_REQUEST));
+
+    Marketplace.BuyAssetsResponse bought =
+        client(MARKETPLACE_CERT).buyAssets(order.getAssetsList(), order.getMaxPrice());
+    assertEquals(15, bought.getAssets(0).getAssetId().byteAt(7));
+    assertEquals(10109, bought.getCost());
+
+    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+    assertEquals("/proto.hummingbird.v1.MarketplaceService/BuyAssets", request.getPath());
+    assertArrayEquals(hex(BUY_REQUEST), request.getBody().readByteArray()); // the same as curl
+  }
+
+  /** The marketplace answers an order it does not fill with 200 and no assets, as seen on tiny4. */
+  @Test
+  void testBuyAssetsNotBought() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse(""));
+    Marketplace.BuyAssetsRequest order = Marketplace.BuyAssetsRequest.parseFrom(hex(BUY_REQUEST));
+    MarketplaceClient client = client(MARKETPLACE_CERT);
+    assertThrows(
+        IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+  }
+
+  private static MockResponse protoResponse(String hex) {
+    return new MockResponse()
+        .addHeader("Content-Type", "application/proto")
+        .setBody(new Buffer().write(ByteString.decodeHex(hex)));
+  }
+
+  private static byte[] hex(String hex) {
+    return ByteString.decodeHex(hex).toByteArray();
+  }
+
   /** The answer of the tiny4 marketplace to a call without a token, as captured with curl. */
   @Test
   void testError() {

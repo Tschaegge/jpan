@@ -107,6 +107,32 @@ public final class MarketplaceClient {
   }
 
   /**
+   * Buys parts of assets, all or none: the marketplace buys nothing if one part cannot be bought or
+   * the total exceeds maxPrice. Every bought part becomes an asset of its own with a new ID.
+   *
+   * @param assets what to buy: the asset ID, the exact time window and the bandwidth in kbit/s
+   * @param maxPrice the most the whole purchase may cost, in the unit of {@link #info()}
+   * @return the IDs of the bought assets, in the order of the request, and the cost
+   * @throws IOException also if the marketplace returns fewer assets than requested
+   */
+  public Marketplace.BuyAssetsResponse buyAssets(List<Marketplace.BuyAsset> assets, long maxPrice)
+      throws IOException {
+    byte[] request =
+        Marketplace.BuyAssetsRequest.newBuilder()
+            .addAllAssets(assets)
+            .setMaxPrice(maxPrice)
+            .build()
+            .toByteArray();
+    Marketplace.BuyAssetsResponse response =
+        Marketplace.BuyAssetsResponse.parseFrom(post("BuyAssets", request));
+    if (response.getAssetsCount() < assets.size()) {
+      throw new IOException(
+          "Marketplace bought " + response.getAssetsCount() + " of " + assets.size() + " assets");
+    }
+    return response;
+  }
+
+  /**
    * Calls one method of the marketplace.
    *
    * @param method the name of the rpc in marketplace.proto
