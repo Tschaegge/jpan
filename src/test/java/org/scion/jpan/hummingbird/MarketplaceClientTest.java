@@ -137,6 +137,27 @@ class MarketplaceClientTest {
         IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
   }
 
+  /**
+   * Redeeming asset 15 from testBuyAssets on tiny4. The real 16-byte key is replaced by 00 to 0f.
+   */
+  @Test
+  void testRedeemAsset() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse("0a10000102030405060708090a0b0c0d0e0f18ec07209402"));
+    com.google.protobuf.ByteString asset15 =
+        com.google.protobuf.ByteString.copyFrom(hex("000000000000000f"));
+
+    Marketplace.RedeemAssetResponse reservation = client(MARKETPLACE_CERT).redeemAsset(asset15);
+    assertArrayEquals(
+        hex("000102030405060708090a0b0c0d0e0f"), reservation.getAuthenticationKey().toByteArray());
+    assertEquals(0, reservation.getReservationId()); // not on the wire: 0 is the default
+    assertEquals(276, reservation.getBwDataplaneEncoding()); // the codepoint of 1004 kbit/s
+
+    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+    assertEquals("/proto.hummingbird.v1.MarketplaceService/RedeemAsset", request.getPath());
+    assertArrayEquals(hex("1a08000000000000000f"), request.getBody().readByteArray()); // as curl
+  }
+
   private static MockResponse protoResponse(String hex) {
     return new MockResponse()
         .addHeader("Content-Type", "application/proto")

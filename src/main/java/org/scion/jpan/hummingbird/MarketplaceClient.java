@@ -16,6 +16,7 @@ package org.scion.jpan.hummingbird;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.security.GeneralSecurityException;
@@ -129,6 +130,21 @@ public final class MarketplaceClient {
       throw new IOException(
           "Marketplace bought " + response.getAssetsCount() + " of " + assets.size() + " assets");
     }
+    return response;
+  }
+
+  /**
+   * Turns a bought asset into a reservation: the AS, or the marketplace on its behalf, derives the
+   * authentication key A_K for it. Interfaces and time window are those of the asset.
+   *
+   * @param assetId the ID of a bought interface-pair asset, as {@link #buyAssets} returns it
+   * @return the authentication key, the reservation ID and the bandwidth as a codepoint
+   */
+  public Marketplace.RedeemAssetResponse redeemAsset(ByteString assetId) throws IOException {
+    byte[] request =
+        Marketplace.RedeemAssetRequest.newBuilder().setIfPairAssetId(assetId).build().toByteArray();
+    Marketplace.RedeemAssetResponse response =
+        Marketplace.RedeemAssetResponse.parseFrom(post("RedeemAsset", request));
     return response;
   }
 
