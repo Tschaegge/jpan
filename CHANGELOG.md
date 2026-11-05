@@ -180,19 +180,36 @@ TODO
 
 ### Added
 
-Nothing yet
+- Additional constructor for `RequestPath`
+  [#302](https://github.com/scionproto-contrib/jpan/pull/302)
 
-## 0.8.1
+## [0.8.1] - 2026-11-02
 
 ### Fixed
 
 - Fixed NPE in `ScionDatagramPacket.getSocketAddress()`
   [#294](https://github.com/scionproto-contrib/jpan/pull/294)
+- Fixed code format plugin failures
+  [#297](https://github.com/scionproto-contrib/jpan/pull/297)
 
-### Fixed
+### Changed
 
 - Post release updates
   [#293](https://github.com/scionproto-contrib/jpan/pull/293)
+
+### Added
+
+- Added convenience constructor for `ScionSocketAddress`
+  [#295](https://github.com/scionproto-contrib/jpan/pull/295)
+- Made `PathSelectorWithRefresh` properly extendable.
+  [#296](https://github.com/scionproto-contrib/jpan/pull/296)
+- Improved API documentation for `PathSelector`.
+  [#298](https://github.com/scionproto-contrib/jpan/pull/298)
+- Made `RequestPath` and `ResponsePath` extendable with protected constructor.
+  [#299](https://github.com/scionproto-contrib/jpan/pull/299)
+- Added `ScionUtil.toStringIAs()` utility function.
+  [#300](https://github.com/scionproto-contrib/jpan/pull/300)
+
 
 ## [0.8.0] - 2026-10-16
 
@@ -786,7 +803,8 @@ For example: `Path.getFirstHopAddress()`, `DatagramChannel.setPathPolicy()`
 ### Removed
 - Nothing
 
-[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/scionproto-contrib/jpan/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/scionproto-contrib/jpan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scionproto-contrib/jpan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/scionproto-contrib/jpan/compare/v0.6.0...v0.6.1
