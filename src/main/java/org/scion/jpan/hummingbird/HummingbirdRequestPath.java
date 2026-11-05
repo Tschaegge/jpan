@@ -23,15 +23,15 @@ import org.scion.jpan.internal.header.HeaderConstants;
 import org.scion.jpan.internal.header.HummingbirdPathConverter;
 
 /**
- * A Hummingbird path for requests, with flyovers for sending with reservations. It wraps the SCION
- * {@link RequestPath} it was built from rather than extending it, because its bytes differ from
- * those of the SCION path. Send it through {@link
- * org.scion.jpan.ScionDatagramChannel#send(java.nio.ByteBuffer, Path)}, or through a {@link
- * org.scion.jpan.ScionDatagramSocket} with a {@link org.scion.jpan.ScionDatagramPacket}.
+ * A Hummingbird path for requests, with flyovers for sending with reservations. It keeps the
+ * metadata of the SCION {@link RequestPath} it was built from, but its raw bytes are a Hummingbird
+ * path, so {@link PathMetadata#getRawPath()} still returns the SCION bytes. Send it through {@link
+ * org.scion.jpan.ScionDatagramChannel#send(java.nio.ByteBuffer, Path)}, through a connected
+ * channel, or through a {@link org.scion.jpan.ScionDatagramSocket} with a {@link
+ * org.scion.jpan.ScionDatagramPacket}.
  */
-public class HummingbirdRequestPath extends Path {
+public class HummingbirdRequestPath extends RequestPath {
 
-  private final Path scionPath;
   private final FlyoverAuthenticator authenticator;
 
   /**
@@ -40,39 +40,41 @@ public class HummingbirdRequestPath extends Path {
    * @param scionPath a {@link RequestPath} from JPAN's path lookup
    * @param flyovers one slot per hop field, slot 0 is the local AS. null where there is no
    *     reservation, and an empty array for none at all
-   * @throws IllegalStateException if {@code scionPath} is not a {@link RequestPath}
+   * @throws IllegalStateException if {@code scionPath} is not a {@link RequestPath}, or is a {@link
+   *     HummingbirdRequestPath} already
    * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS, or
    *     the flyovers do not match it
    */
   public HummingbirdRequestPath(Path scionPath, Flyover[] flyovers) {
     super(
+        scionPath.getMetadata(),
         toHummingbird(scionPath, flyovers),
         scionPath.getFirstHopAddress(),
         scionPath.getLocalIsdAs(),
         scionPath.getRemoteIsdAs(),
         scionPath.getRemoteAddress(),
         scionPath.getRemotePort());
-    this.scionPath = scionPath;
     this.authenticator = new FlyoverAuthenticator(getRawPath(), flyovers);
   }
 
   /** The same path as {@code original}, to dstIP and dstPort. */
   private HummingbirdRequestPath(HummingbirdRequestPath original, InetAddress dstIP, int dstPort) {
     super(
+        original.getMetadata(),
         original.getRawPath(),
         original.getFirstHopAddress(),
         original.getLocalIsdAs(),
         original.getRemoteIsdAs(),
         dstIP,
         dstPort);
-    this.scionPath = original.scionPath;
     // Shared, so the counter of the two paths keeps counting up together.
     this.authenticator = original.authenticator;
   }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
-    if (!(scionPath instanceof RequestPath)) {
-      throw new IllegalStateException("The path must be a request path.");
+    // A HummingbirdRequestPath is a RequestPath too, but its bytes are Hummingbird already.
+    if (!(scionPath instanceof RequestPath) || scionPath instanceof HummingbirdRequestPath) {
+      throw new IllegalStateException("The path must be a SCION request path.");
     }
     if (scionPath.getRawPath().length == 0) {
       throw new IllegalArgumentException("Length of Path can't be 0");
@@ -80,11 +82,6 @@ public class HummingbirdRequestPath extends Path {
     byte[] path = HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
     FlyoverAuthenticator.checkFlyovers(path, flyovers);
     return FlyoverAuthenticator.insertFlyovers(path, flyovers);
-  }
-
-  @Override
-  public PathMetadata getMetadata() {
-    return scionPath.getMetadata();
   }
 
   @Override
