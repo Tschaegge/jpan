@@ -14,9 +14,11 @@
 
 package org.scion.jpan.hummingbird;
 
+import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import org.scion.jpan.ScionUtil;
 import org.scion.jpan.proto.hummingbird.Marketplace;
 
 /**
@@ -55,18 +57,22 @@ public final class FlyoverBuyer {
   public Flyover buy(
       long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
       throws IOException {
-    List<Marketplace.SearchAsset> assets =
-        marketplace.searchAssets(isdAs, ingress, egress, bandwidth, startTime, duration);
-    if (assets.size() < 1) {
-      throw new IOException("Empty Asset List");
-    }
-    Marketplace.SearchAsset chosenAsset = assets.get(0); // improve for cheapest instead of first
     Marketplace.BuyAsset order =
-        MarketplaceClient.order(chosenAsset.getAssetId(), bandwidth, startTime, duration);
+        chooseOrder(isdAs, ingress, egress, bandwidth, startTime, duration);
     Marketplace.BuyAssetsResponse bought =
         marketplace.buyAssets(Collections.singletonList(order), maxPrice);
-    Marketplace.RedeemAssetResponse reservation =
-        marketplace.redeemAsset(bought.getAssets(0).getAssetId());
+    return redeem(bought.getAssets(0).getAssetId(), ingress, egress, startTime, duration);
+  }
+
+  /**
+   * Redeems a bought asset and turns the reservation into a flyover. The marketplace does not send
+   * the interfaces or the time window back, so they come from the order.
+   *
+   * @param assetId the ID from {@link MarketplaceClient#buyAssets}, not the one from the search
+   */
+  private Flyover redeem(ByteString assetId, int ingress, int egress, long startTime, int duration)
+      throws IOException {
+    Marketplace.RedeemAssetResponse reservation = marketplace.redeemAsset(assetId);
     return new Flyover(
         ingress,
         egress,
@@ -75,5 +81,26 @@ public final class FlyoverBuyer {
         startTime,
         duration,
         reservation.getAuthenticationKey().toByteArray());
+  }
+
+  /**
+   * Searches for an asset and orders the part of it that is needed. Search and order take the same
+   * bandwidth and time window, so the chosen asset always covers what is ordered.
+   *
+   * @throws IOException if no asset fits or the search fails
+   */
+  private Marketplace.BuyAsset chooseOrder(
+      long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
+      throws IOException {
+    List<Marketplace.SearchAsset> assets =
+        marketplace.searchAssets(isdAs, ingress, egress, bandwidth, startTime, duration);
+    if (assets.isEmpty()) {
+      throw new IOException(
+          String.format(
+              "No asset for %s %d>%d with %d kbit/s",
+              ScionUtil.toStringIA(isdAs), ingress, egress, bandwidth));
+    }
+    // Every asset found covers the window, so any fits. Choosing the cheapest is not done yet.
+    return MarketplaceClient.order(assets.get(0).getAssetId(), bandwidth, startTime, duration);
   }
 }
