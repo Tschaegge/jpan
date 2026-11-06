@@ -146,6 +146,17 @@ class FlyoverBuyerTest {
     assertSearch(IA_111, 4, 0);
   }
 
+  /** Metadata with more interfaces than the bytes have links is refused before paying. */
+  @Test
+  void testBuyPathWrongMetadata() {
+    long[] tooMany = {IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41, IA_111, 42, IA_112, 2};
+    Path path = path(HummingbirdRequestPathTest.TINY4_PATH, tooMany);
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> buyPath(path, 3));
+    assertEquals("The path has 3 ASes, so its metadata needs 4 interfaces, not 6", e.getMessage());
+    assertEquals(3, server.getRequestCount()); // the three searches, no BuyAssets
+  }
+
   /** A request path with the interfaces the control service reports, as (ISD-AS, ID) pairs. */
   private static Path path(byte[] raw, long... isdAsAndId) {
     PathMetadata.Builder metadata = PathMetadata.newBuilder().setRaw(raw.clone());

@@ -85,7 +85,8 @@ public final class FlyoverBuyer {
    *     call to the marketplace fails
    * @throws IllegalStateException if {@code scionPath} is not a SCION {@link
    *     org.scion.jpan.RequestPath}
-   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS
+   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS, or
+   *     its metadata has more than two interfaces per link
    */
   public Flyover[] buyPath(Path scionPath, int bandwidth, long startTime, int duration)
       throws IOException {
@@ -118,6 +119,13 @@ public final class FlyoverBuyer {
       orders.add(order);
       slots.add(i);
       asCount++;
+    }
+    // Before buying we want to make sure the number of interfaces is what we expect
+    if (interfaces.size() != 2 * (asCount - 1)) {
+      throw new IllegalArgumentException(
+          String.format(
+              "The path has %d ASes, so its metadata needs %d interfaces, not %d",
+              asCount, 2 * (asCount - 1), interfaces.size()));
     }
 
     // One purchase for the whole path: the marketplace buys all of it or nothing.
