@@ -16,7 +16,10 @@ package org.scion.jpan.hummingbird;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.google.protobuf.MessageLite;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -25,16 +28,29 @@ import okio.Buffer;
 import okio.ByteString;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.scion.jpan.PackageVisibilityHelper;
+import org.scion.jpan.Path;
+import org.scion.jpan.PathMetadata;
 import org.scion.jpan.ScionUtil;
+import org.scion.jpan.proto.hummingbird.Marketplace;
 
 /**
  * A mock marketplace that replays one search, buy and redeem captured with curl on tiny4: at AS 112
- * with the pair (0, 1), 10 s of 1000 kbit/s from 2026-11-03 13:01:01 UTC.
+ * with the pair (0, 1), 10 s of 1000 kbit/s from 2026-11-03 13:01:01 UTC. The buyPath tests build
+ * their answers instead: they only check which AS and pair each slot gets, the rest is buy's.
  */
 class FlyoverBuyerTest {
 
   private static final long IA_112 = ScionUtil.parseIA("1-ff00:0:112");
+  private static final long IA_110 = ScionUtil.parseIA("1-ff00:0:110");
+  private static final long IA_111 = ScionUtil.parseIA("1-ff00:0:111");
   private static final long START = 1793710861L;
+  private static final int RES_ID = 100;
+
+  /** Made up: three ASes in one segment (SegLen 3, ConsDir), hop fields 0>1, 2>3, 4>0. */
+  private static final String ONE_SEGMENT_PATH =
+      "00003000010000006a7f08be003f00000001000000000000003f00020003000000000000"
+          + "003f00040000000000000000";
 
   private static final String SEARCH_REQUEST =
       "109282808080e07f1800200128e8073206088db6a7d7063a060897b6a7d706";
@@ -99,6 +115,77 @@ class FlyoverBuyerTest {
     assertEquals(1, server.getRequestCount()); // only the search
   }
 
+  /** tiny4: AS 110 has two hop fields, only the first carries a flyover (Appendix A.5). */
+  @Test
+  void testBuyPath() throws Exception {
+    Path path =
+        path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41);
+    Flyover[] flyovers = buyPath(path, 3);
+
+    assertSearch(IA_112, 0, 1);
+    assertSearch(IA_110, 2, 1);
+    assertSearch(IA_111, 41, 0);
+    Marketplace.BuyAssetsRequest buy =
+        Marketplace.BuyAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+    assertEquals(3, buy.getAssetsCount());
+    assertEquals(100000, buy.getMaxPrice()); // per purchase, not per flyover
+    assertEquals(RES_ID, flyovers[0].getResID());
+    assertEquals(RES_ID + 1, flyovers[1].getResID());
+    assertNull(flyovers[2]);
+    assertEquals(RES_ID + 2, flyovers[3].getResID());
+    // Throws if a flyover is in a slot whose interfaces differ from its own.
+    new HummingbirdRequestPath(path, flyovers);
+  }
+
+  /** The third AS is in slot 2 but in interface entry 3. On tiny4 slot and entry are equal. */
+  @Test
+  void testBuyPathOneSegment() throws Exception {
+    buyPath(path(hex(ONE_SEGMENT_PATH), IA_112, 1, IA_110, 2, IA_110, 3, IA_111, 4), 3);
+    assertSearch(IA_112, 0, 1);
+    assertSearch(IA_110, 2, 3);
+    assertSearch(IA_111, 4, 0);
+  }
+
+  /** A request path with the interfaces the control service reports, as (ISD-AS, ID) pairs. */
+  private static Path path(byte[] raw, long... isdAsAndId) {
+    PathMetadata.Builder metadata = PathMetadata.newBuilder().setRaw(raw.clone());
+    for (int i = 0; i < isdAsAndId.length; i += 2) {
+      metadata.addInterfaces(PathMetadata.PathInterface.create(isdAsAndId[i], isdAsAndId[i + 1]));
+    }
+    InetSocketAddress dst = new InetSocketAddress(InetAddress.getLoopbackAddress(), 8080);
+    return PackageVisibilityHelper.createRequestPath(metadata.build(), dst);
+  }
+
+  /** Buys a path of n ASes from a marketplace with an asset for each; answer i gets RES_ID + i. */
+  private Flyover[] buyPath(Path path, int n) throws IOException {
+    Marketplace.SearchAssetsResponse found =
+        Marketplace.SearchAssetsResponse.newBuilder()
+            .addAssets(Marketplace.SearchAsset.getDefaultInstance())
+            .build();
+    Marketplace.BuyAssetsResponse.Builder bought = Marketplace.BuyAssetsResponse.newBuilder();
+    for (int i = 0; i < n; i++) {
+      server.enqueue(protoResponse(found));
+      bought.addAssets(Marketplace.BoughtAsset.getDefaultInstance());
+    }
+    server.enqueue(protoResponse(bought.build()));
+    for (int i = 0; i < n; i++) {
+      server.enqueue(
+          protoResponse(
+              Marketplace.RedeemAssetResponse.newBuilder()
+                  .setAuthenticationKey(com.google.protobuf.ByteString.copyFrom(new byte[16]))
+                  .setReservationId(RES_ID + i)
+                  .build()));
+    }
+    return buyer().buyPath(path, 1000, START, 10);
+  }
+
+  private void assertSearch(long isdAs, int ingress, int egress) throws Exception {
+    Marketplace.SearchAssetsRequest search =
+        Marketplace.SearchAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+    assertEquals(ScionUtil.toStringIA(isdAs), ScionUtil.toStringIA(search.getIa()));
+    assertEquals(ingress + ">" + egress, search.getIfIdIngress() + ">" + search.getIfIdEgress());
+  }
+
   /** Over plain HTTP: TLS is tested in MarketplaceClientTest. */
   private FlyoverBuyer buyer() throws IOException {
     server.start();
@@ -116,6 +203,10 @@ class FlyoverBuyerTest {
     return new MockResponse()
         .addHeader("Content-Type", "application/proto")
         .setBody(new Buffer().write(ByteString.decodeHex(hex)));
+  }
+
+  private static MockResponse protoResponse(MessageLite message) {
+    return protoResponse(ByteString.of(message.toByteArray()).hex());
   }
 
   private static byte[] hex(String hex) {

@@ -155,7 +155,7 @@ class HummingbirdRequestPathTest {
    * The SCION path 112 -> 110 -> 111 of the packet captured on tiny4: the info and hop fields of
    * HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111, in SCION's format.
    */
-  private static final byte[] TINY4_PATH =
+  static final byte[] TINY4_PATH =
       fromHex(
           "000020800000bbfe6a7f08be0100e85c6a7f08b9003f00010000e3fcf2dbcd93003f000000025d7b73e0d131"
               + "003f00000001c47cf0e2eb51003f00290000a9be1d3a07e6");
