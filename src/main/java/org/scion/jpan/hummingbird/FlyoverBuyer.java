@@ -16,9 +16,14 @@ package org.scion.jpan.hummingbird;
 
 import com.google.protobuf.ByteString;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import org.scion.jpan.Path;
+import org.scion.jpan.PathMetadata;
 import org.scion.jpan.ScionUtil;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.proto.hummingbird.Marketplace;
 
 /**
@@ -31,10 +36,12 @@ public final class FlyoverBuyer {
   private final long maxPrice;
 
   /**
-   * A buyer that pays at most maxPrice for one flyover.
+   * A buyer that pays at most maxPrice for one purchase.
    *
    * @param marketplace where the flyovers are bought
-   * @param maxPrice the most one flyover may cost, in the unit of {@link MarketplaceClient#info()}
+   * @param maxPrice the most one purchase may cost, in the unit of {@link
+   *     MarketplaceClient#info()}: one flyover for {@link #buy}, all flyovers of the path together
+   *     for {@link #buyPath}
    */
   public FlyoverBuyer(MarketplaceClient marketplace, long maxPrice) {
     this.marketplace = marketplace;
@@ -62,6 +69,72 @@ public final class FlyoverBuyer {
     Marketplace.BuyAssetsResponse bought =
         marketplace.buyAssets(Collections.singletonList(order), maxPrice);
     return redeem(bought.getAssets(0).getAssetId(), ingress, egress, startTime, duration);
+  }
+
+  /**
+   * Buys one flyover for every AS of a SCION path in a single purchase and redeems them. The
+   * purchase is all or nothing: if it would cost more than maxPrice, nothing is bought.
+   *
+   * @param scionPath a {@link org.scion.jpan.RequestPath} from JPAN's path lookup
+   * @param bandwidth in kbit/s, not a codepoint, the same for every AS
+   * @param startTime absolute Unix seconds, in the past or the router drops the packets
+   * @param duration length of the reservations in seconds
+   * @return one slot per hop field, ready for {@link HummingbirdRequestPath}. null in the second
+   *     hop field of an AS at a segment change, which carries no flyover (Appendix A.5)
+   * @throws IOException if an AS has no fitting asset, the purchase costs more than maxPrice or a
+   *     call to the marketplace fails
+   * @throws IllegalStateException if {@code scionPath} is not a SCION {@link
+   *     org.scion.jpan.RequestPath}
+   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS
+   */
+  public Flyover[] buyPath(Path scionPath, int bandwidth, long startTime, int duration)
+      throws IOException {
+    // The same type-5 bytes the HummingbirdRequestPath will have, so the slots match.
+    byte[] rawPath = HummingbirdRequestPath.toHummingbird(scionPath);
+    HummingbirdPathRaw path = HummingbirdPathRaw.create(ByteBuffer.wrap(rawPath));
+    Flyover[] flyovers = new Flyover[path.getHopFieldCount()];
+    // The hop fields carry no ISD-AS, so it comes from the metadata.
+    List<PathMetadata.PathInterface> interfaces = scionPath.getMetadata().getInterfaces();
+
+    List<Marketplace.BuyAsset> orders = new ArrayList<Marketplace.BuyAsset>();
+    List<Integer> slots = new ArrayList<Integer>(); // slots.get(n) is the slot of orders.get(n)
+    int asCount = 0; // ASes so far, not slots: a crossover AS has two slots
+    for (int i = 0; i < flyovers.length; i++) {
+      if (path.getCrossOver(i) == 1) {
+        continue;
+      }
+      // Two entries per link, so every AS except from the first and last appears twice.
+      int ifIndex = asCount == 0 ? 0 : 2 * asCount - 1;
+      long isdAs = interfaces.get(ifIndex).getIsdAs();
+      // chooseOrder throws if no asset fits. Nothing is bought before the loop ends.
+      Marketplace.BuyAsset order =
+          chooseOrder(
+              isdAs,
+              path.getFlyoverIngress(i),
+              path.getFlyoverEgress(i),
+              bandwidth,
+              startTime,
+              duration);
+      orders.add(order);
+      slots.add(i);
+      asCount++;
+    }
+
+    // One purchase for the whole path: the marketplace buys all of it or nothing.
+    Marketplace.BuyAssetsResponse bought = marketplace.buyAssets(orders, maxPrice);
+    // RedeemAsset has no batch form: each AS derives the key for its own flyover. The response
+    // lists the bought assets in the order of the request.
+    for (int n = 0; n < orders.size(); n++) {
+      int slot = slots.get(n);
+      flyovers[slot] =
+          redeem(
+              bought.getAssets(n).getAssetId(),
+              path.getFlyoverIngress(slot),
+              path.getFlyoverEgress(slot),
+              startTime,
+              duration);
+    }
+    return flyovers;
   }
 
   /**

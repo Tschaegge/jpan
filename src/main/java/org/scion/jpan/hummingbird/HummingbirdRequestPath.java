@@ -72,6 +72,20 @@ public class HummingbirdRequestPath extends RequestPath {
   }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
+    byte[] path = toHummingbird(scionPath);
+    FlyoverAuthenticator.checkFlyovers(path, flyovers);
+    return FlyoverAuthenticator.insertFlyovers(path, flyovers);
+  }
+
+  /**
+   * The bytes of {@code scionPath} as a Hummingbird path without flyovers, the same bytes a {@link
+   * HummingbirdRequestPath} built from it starts with.
+   *
+   * @throws IllegalStateException if {@code scionPath} is not a {@link RequestPath}, or is a {@link
+   *     HummingbirdRequestPath} already
+   * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS
+   */
+  static byte[] toHummingbird(Path scionPath) {
     // A HummingbirdRequestPath is a RequestPath too, but its bytes are Hummingbird already.
     if (!(scionPath instanceof RequestPath) || scionPath instanceof HummingbirdRequestPath) {
       throw new IllegalStateException("The path must be a SCION request path.");
@@ -79,9 +93,7 @@ public class HummingbirdRequestPath extends RequestPath {
     if (scionPath.getRawPath().length == 0) {
       throw new IllegalArgumentException("Length of Path can't be 0");
     }
-    byte[] path = HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
-    FlyoverAuthenticator.checkFlyovers(path, flyovers);
-    return FlyoverAuthenticator.insertFlyovers(path, flyovers);
+    return HummingbirdPathConverter.convertFromScion(scionPath.getRawPath(), 0, 0, 0);
   }
 
   @Override
