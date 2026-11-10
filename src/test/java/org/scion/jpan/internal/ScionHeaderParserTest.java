@@ -295,6 +295,22 @@ class ScionHeaderParserTest {
   }
 
   /**
+   * A segment boundary must fall between two hop fields: each SegLen is the length of its own
+   * segment (Appendix A.1). The captured hop fields have 5, 5, 3 and 5 lines, so of all splits of
+   * its 18 lines into two segments only 5|13, 10|8 and 13|5 are valid. 1|17 used to pass validation
+   * and then make receive() throw an IllegalArgumentException.
+   */
+  @Test
+  void validateHummingbirdSegmentBoundaries() {
+    for (int seg0 = 1; seg0 < 18; seg0++) {
+      ByteBuffer data = capturedPacketWithPathMeta(36, seg0 << 14 | (18 - seg0) << 7);
+      boolean valid = seg0 == 5 || seg0 == 10 || seg0 == 13;
+      String split = "SegLen " + seg0 + ", " + (18 - seg0);
+      assertEquals(valid, ScionHeaderParser.validate(data) == null, split);
+    }
+  }
+
+  /**
    * The Hummingbird packet captured on tiny4, plus a UDP header and payload, with pathMetaWord as
    * its path meta header.
    *

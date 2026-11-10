@@ -523,20 +523,32 @@ public class ScionHeaderParser {
     if (path.length != hopsStart + lines * HummingbirdPathRaw.LINE_LEN) {
       return "Hummingbird path length does not match its meta header";
     }
-    // Walk the hop fields, 3 lines each or 5 with a flyover. CurrHF must point at the start of one.
+    // Walk the hop fields segment by segment, 3 lines each or 5 with a flyover. Each SegLen is the
+    // length of its own segment (Appendix A.1), so its hop fields must fill it exactly: the sum of
+    // all lines alone would let a hop field cross a segment boundary. CurrHF must point at the
+    // start of a hop field.
     int currHf = ByteUtil.readInt(meta, 2, 8);
     boolean currHfFound = false;
     int line = 0;
-    for (int hops = 0; line < lines; hops++) {
-      if (hops == HummingbirdPathRaw.MAX_HOP_FIELDS) {
-        return "Hummingbird path with too many hop fields";
+    int hops = 0; // over all segments
+    int segmentEnd = 0;
+    for (int seg = 0; seg < segments; seg++) {
+      segmentEnd += ByteUtil.readInt(meta, 11 + 7 * seg, 7);
+      while (line < segmentEnd) {
+        if (hops == HummingbirdPathRaw.MAX_HOP_FIELDS) {
+          return "Hummingbird path with too many hop fields";
+        }
+        currHfFound = currHfFound | (line == currHf);
+        boolean flyover = (path[hopsStart + line * HummingbirdPathRaw.LINE_LEN] & 0x80) != 0;
+        line += flyover ? HummingbirdPathRaw.FLYOVER_LINES : HummingbirdPathRaw.HOP_LINES;
+        hops++;
       }
-      currHfFound = currHfFound | (line == currHf);
-      boolean flyover = (path[hopsStart + line * HummingbirdPathRaw.LINE_LEN] & 0x80) != 0;
-      line += flyover ? HummingbirdPathRaw.FLYOVER_LINES : HummingbirdPathRaw.HOP_LINES;
+      if (line != segmentEnd) {
+        return "Hummingbird hop field crosses a segment boundary";
+      }
     }
     // CurrINF also catches a path without hop fields: it has no segment to point at.
-    if (line != lines || !currHfFound || ByteUtil.readInt(meta, 0, 2) >= segments) {
+    if (!currHfFound || ByteUtil.readInt(meta, 0, 2) >= segments) {
       return "Hummingbird hop fields do not match the meta header";
     }
     return null;
