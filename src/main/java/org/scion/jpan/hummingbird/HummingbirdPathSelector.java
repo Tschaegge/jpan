@@ -175,7 +175,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   }
 
   /** When the first of the flyovers expires. Each AS may have rounded the duration up. */
-  private static long expiryOf(Flyover[] flyovers) {
+  static long expiryOf(Flyover[] flyovers) {
     long first = Long.MAX_VALUE;
     for (Flyover f : flyovers) {
       if (f != null) {
@@ -186,7 +186,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   }
 
   /** Whether both paths cross the same ASes through the same interfaces. */
-  private static boolean sameRoute(Path a, Path b) {
+  static boolean sameRoute(Path a, Path b) {
     List<PathMetadata.PathInterface> x = a.getMetadata().getInterfaces();
     List<PathMetadata.PathInterface> y = b.getMetadata().getInterfaces();
     if (x.size() != y.size()) {

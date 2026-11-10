@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -26,8 +27,10 @@ import org.junit.jupiter.api.Test;
 import org.scion.jpan.Path;
 import org.scion.jpan.PathPolicy;
 import org.scion.jpan.Scion;
+import org.scion.jpan.ScionService;
 import org.scion.jpan.ScionSocketAddress;
 import org.scion.jpan.ScionUtil;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.proto.hummingbird.Marketplace;
 import org.scion.jpan.testutil.MockNetwork2;
 
@@ -58,6 +61,8 @@ class HummingbirdPathSelectorTest {
       try {
         assertEquals(5, selector.getPath().getPathType());
         assertEquals(requests, marketplace.getRequestCount());
+        int ases = (requests - 1) / 2;
+        assertEquals(ases, flyoverCount(selector.getPath()), "one flyover per AS");
       } finally {
         selector.close();
       }
@@ -77,28 +82,114 @@ class HummingbirdPathSelectorTest {
   }
 
   /**
-   * 13 s reservations start 10 s back, so they expire 3 s after open(); renewed 1 s ahead, the
-   * timer buys again after about 2 s and switches to the new path.
+   * 18 s reservations start 10 s back and are renewed 4 s ahead, so the renewal is due 4 s after
+   * the start of the second in which they were bought. Bought at 12.85 s, the start is 2 s, due at
+   * 14 s, and the timer, checking once a second, renews 1.2 to 2.2 s later than that: so 3 to 5 s
+   * after the purchase. Not after 1 s (an expiry never updated) and not only at expiry (7 s and
+   * later).
    */
   @Test
   void testRenews() throws Exception {
     try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
-      HummingbirdPathSelector selector = selector(13, 1);
+      HummingbirdPathSelector selector = selector(18, 4);
       int requests = enqueuePurchase();
       enqueuePurchase();
-      enqueuePurchase(); // spare, so that a late third renewal does not wait for an answer
+      enqueuePurchase(); // spare, so that a late renewal does not wait for an answer
       selector.open(REMOTE);
       try {
         Path first = selector.getPath();
-        for (int i = 0; i < 50 && selector.getPath() == first; i++) {
+        Thread.sleep(2000);
+        assertEquals(requests, marketplace.getRequestCount(), "no purchase before it is due");
+        for (int i = 0; i < 40 && selector.getPath() == first; i++) {
           Thread.sleep(100);
         }
-        assertNotSame(first, selector.getPath());
+        assertNotSame(first, selector.getPath(), "renewed before the reservations expired");
         assertEquals(2 * requests, marketplace.getRequestCount());
       } finally {
         selector.close();
       }
     }
+  }
+
+  /**
+   * A failed renewal keeps the old path, which is still valid, and the timer tries again a second
+   * later. 16 s reservations renewed 4 s ahead are due 2 to 3 s after open().
+   */
+  @Test
+  void testRenewalFailureKeepsPath() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      HummingbirdPathSelector selector = selector(16, 4);
+      int requests = enqueuePurchase();
+      marketplace.enqueue(new MockResponse().setResponseCode(503).setBody("{\"code\":\"down\"}"));
+      enqueuePurchase();
+      enqueuePurchase(); // spare
+      selector.open(REMOTE);
+      try {
+        Path first = selector.getPath();
+        for (int i = 0; i < 40 && marketplace.getRequestCount() <= requests; i++) {
+          Thread.sleep(100);
+        }
+        Thread.sleep(300); // the failed attempt has been handled, the next one is ~0.7 s away
+        assertSame(first, selector.getPath(), "the old path stays after a failed renewal");
+        for (int i = 0; i < 30 && selector.getPath() == first; i++) {
+          Thread.sleep(100);
+        }
+        assertNotSame(first, selector.getPath(), "the timer tried again");
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /** The path is renewed for the flyover that ends first: each AS may round the duration up. */
+  @Test
+  void testExpiryOf() {
+    Flyover late = new Flyover(0, 1, 1, 1, 1000, 30, new byte[16]);
+    Flyover early = new Flyover(2, 1, 2, 1, 1000, 20, new byte[16]);
+    assertEquals(1020, HummingbirdPathSelector.expiryOf(new Flyover[] {late, early, null}));
+  }
+
+  /** Only ASes and interfaces count: new bytes for the same route keep the flyovers. */
+  @Test
+  void testSameRoute() {
+    long a = ScionUtil.parseIA("1-ff00:0:112");
+    long b = ScionUtil.parseIA("1-ff00:0:110");
+    long c = ScionUtil.parseIA("1-ff00:0:111");
+    byte[] raw = HummingbirdRequestPathTest.TINY4_PATH;
+    byte[] otherMac = raw.clone();
+    otherMac[otherMac.length - 1] ^= 0x55;
+    Path path = FlyoverBuyerTest.path(raw, a, 1, b, 2, b, 1, c, 41);
+    assertTrue(sameRoute(path, FlyoverBuyerTest.path(otherMac, a, 1, b, 2, b, 1, c, 41)));
+    assertFalse(sameRoute(path, FlyoverBuyerTest.path(raw, a, 1, b, 2, b, 3, c, 41))); // interface
+    assertFalse(sameRoute(path, FlyoverBuyerTest.path(raw, a, 1, b, 2, b, 1, a, 41))); // AS
+    assertFalse(sameRoute(path, FlyoverBuyerTest.path(raw, a, 1, b, 2))); // shorter
+  }
+
+  /** A renewal needs time between buying and renewing: 0 < renewBefore < duration - 10. */
+  @Test
+  void testRenewBeforeChecked() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      ScionService service = Scion.defaultService();
+      PathPolicy policy = PathPolicy.MIN_HOPS;
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HummingbirdPathSelector.create(service, policy, null, 1000, 60, 0));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HummingbirdPathSelector.create(service, policy, null, 1000, 60, 50));
+      HummingbirdPathSelector.create(service, policy, null, 1000, 60, 49).close();
+    }
+  }
+
+  private static boolean sameRoute(Path a, Path b) {
+    return HummingbirdPathSelector.sameRoute(a, b);
+  }
+
+  /** Flyovers in a Hummingbird path: each takes 5 lines instead of 3. */
+  private static int flyoverCount(Path path) {
+    HummingbirdPathRaw raw = HummingbirdPathRaw.create(ByteBuffer.wrap(path.getRawPath()));
+    int lines = raw.getSegLen(0) + raw.getSegLen(1) + raw.getSegLen(2);
+    return (lines - 3 * raw.getHopFieldCount()) / 2;
   }
 
   private HummingbirdPathSelector selector(int duration, int renewBefore) throws IOException {
