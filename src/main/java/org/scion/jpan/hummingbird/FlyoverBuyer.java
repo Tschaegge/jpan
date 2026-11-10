@@ -18,7 +18,6 @@ import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
@@ -39,37 +38,12 @@ public final class FlyoverBuyer {
    * A buyer that pays at most maxPrice for one purchase.
    *
    * @param marketplace where the flyovers are bought
-   * @param maxPrice the most one purchase may cost, in the unit of {@link
-   *     MarketplaceClient#info()}: one flyover for {@link #buy}, all flyovers of the path together
-   *     for {@link #buyPath}
+   * @param maxPrice the most one purchase of {@link #buyPath}, all flyovers of the path together,
+   *     may cost, in the smallest unit of the marketplace's currency (CHF cents on tiny4)
    */
   public FlyoverBuyer(MarketplaceClient marketplace, long maxPrice) {
     this.marketplace = marketplace;
     this.maxPrice = maxPrice;
-  }
-
-  /**
-   * Buys one flyover for one AS from the cheapest asset that has the bandwidth for the whole time
-   * window. The flyover may last longer than duration, see {@link Flyover#getDuration()}: the
-   * window is rounded up to the asset's minimum duration and granularity.
-   *
-   * @param isdAs the AS, as {@link org.scion.jpan.ScionUtil#parseIA} returns it
-   * @param ingress interface in travel direction, 0 if the reservation starts in this AS
-   * @param egress interface in travel direction, 0 if the reservation ends in this AS
-   * @param bandwidth in kbit/s, not a codepoint
-   * @param startTime absolute Unix seconds, in the past or the router drops the packets
-   * @param duration length of the reservation in seconds
-   * @return the flyover, with the key the AS derived for it
-   * @throws IOException if no asset fits or a call to the marketplace fails
-   */
-  public Flyover buy(
-      long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
-      throws IOException {
-    Marketplace.BuyAsset order =
-        chooseOrder(isdAs, ingress, egress, bandwidth, startTime, duration);
-    Marketplace.BuyAssetsResponse bought =
-        marketplace.buyAssets(Collections.singletonList(order), maxPrice);
-    return redeem(bought.getAssets(0).getAssetId(), ingress, egress, order);
   }
 
   /**

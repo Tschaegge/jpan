@@ -23,10 +23,8 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
 import okio.Buffer;
 import okio.ByteString;
 import org.junit.jupiter.api.AfterEach;
@@ -38,9 +36,9 @@ import org.scion.jpan.ScionUtil;
 import org.scion.jpan.proto.hummingbird.Marketplace;
 
 /**
- * A mock marketplace that replays one search, buy and redeem captured with curl on tiny4: at AS 112
- * with the pair (0, 1), 10 s of 1000 kbit/s from 2026-11-03 13:01:01 UTC. The buyPath tests build
- * their answers instead: they only check which AS and pair each slot gets, the rest is buy's.
+ * {@link FlyoverBuyer#buyPath} against a mock marketplace whose answers are built field by field.
+ * The wire format of each call, byte for byte as captured with curl on tiny4, is tested in {@link
+ * MarketplaceClientTest}.
  */
 class FlyoverBuyerTest {
 
@@ -55,33 +53,6 @@ class FlyoverBuyerTest {
       "00003000010000006a7f08be003f00000001000000000000003f00020003000000000000"
           + "003f00040000000000000000";
 
-  private static final String SEARCH_REQUEST =
-      "109282808080e07f1800200128e8073206088db6a7d7063a060897b6a7d706";
-
-  /** Assets 17, 19 and 21, all of them cover the window. */
-  private static final String SEARCH_RESPONSE =
-      "0a390a080000000000000011109282808080e07f1800200128e807300a38c0843d420608d4d7"
-          + "a6d7064a0608fdbffcda06500a580a6080a3056801"
-          + "0a3a0a080000000000000013109282808080e07f1800200128f0f43c300a38c0843d420608fd"
-          + "93edd6064a0608fdbffcda06500a580a6080a3056801"
-          + "0a390a080000000000000015109282808080e07f1800200128e807300a38c0843d420608bc84"
-          + "a7d7064a0608fdbffcda06500a580a6080a3056801";
-
-  /** The window from asset 17, at most 100000. */
-  private static final String BUY_REQUEST =
-      "0a1d0a0800000000000000111206088db6a7d7061a060897b6a7d70620e80710a08d06";
-
-  /** Asset 22 for 10109. */
-  private static final String BUY_RESPONSE = "0a0a0a08000000000000001610fd4e";
-
-  private static final String REDEEM_REQUEST = "1a080000000000000016";
-
-  /**
-   * Reservation ID 0 (not on the wire), 1004 kbit/s as codepoint 276. The real key is replaced by
-   * 00 to 0f.
-   */
-  private static final String REDEEM_RESPONSE = "0a10000102030405060708090a0b0c0d0e0f18ec07209402";
-
   private final MockWebServer server = new MockWebServer();
 
   @AfterEach
@@ -89,40 +60,10 @@ class FlyoverBuyerTest {
     server.shutdown();
   }
 
-  @Test
-  void testBuy() throws Exception {
-    server.enqueue(protoResponse(SEARCH_RESPONSE));
-    server.enqueue(protoResponse(BUY_RESPONSE));
-    server.enqueue(protoResponse(REDEEM_RESPONSE));
-
-    Flyover flyover = buyer().buy(IA_112, 0, 1, 1000, START, 10);
-    assertEquals(0, flyover.getIngress());
-    assertEquals(1, flyover.getEgress());
-    assertEquals(0, flyover.getResID());
-    assertEquals(276, flyover.getBw());
-    assertEquals(START, flyover.getStartTime());
-    assertEquals(10, flyover.getDuration());
-    assertArrayEquals(fromHex("000102030405060708090a0b0c0d0e0f"), flyover.getAk());
-
-    assertRequest("SearchAssets", SEARCH_REQUEST);
-    assertRequest("BuyAssets", BUY_REQUEST);
-    assertRequest("RedeemAsset", REDEEM_REQUEST);
-  }
-
-  /** If no asset covers the window, nothing is bought. */
-  @Test
-  void testBuyNoAsset() throws Exception {
-    server.enqueue(protoResponse(""));
-    FlyoverBuyer buyer = buyer();
-    assertThrows(IOException.class, () -> buyer.buy(IA_112, 0, 1, 1000, START, 10));
-    assertEquals(1, server.getRequestCount()); // only the search
-  }
-
   /** tiny4: AS 110 has two hop fields, only the first carries a flyover (Appendix A.5). */
   @Test
   void testBuyPath() throws Exception {
-    Path path =
-        path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41);
+    Path path = tiny4();
     Flyover[] flyovers = buyPath(path, 3);
 
     assertSearch(IA_112, 0, 1);
@@ -141,6 +82,11 @@ class FlyoverBuyerTest {
           Marketplace.RedeemAssetRequest.parseFrom(server.takeRequest().getBody().readByteArray());
       assertEquals(boughtId(n), redeem.getIfPairAssetId());
     }
+    // The rest of a flyover comes from its redemption and its order.
+    assertEquals(276, flyovers[0].getBw());
+    assertEquals(START, flyovers[0].getStartTime());
+    assertEquals(10, flyovers[0].getDuration());
+    assertArrayEquals(new byte[16], flyovers[0].getAk());
     // Throws if a flyover is in a slot whose interfaces differ from its own.
     new HummingbirdRequestPath(path, flyovers);
   }
@@ -165,6 +111,67 @@ class FlyoverBuyerTest {
     assertEquals(3, server.getRequestCount()); // the three searches, no BuyAssets
   }
 
+  /** If the first AS has no asset, the search stops there and nothing is bought. */
+  @Test
+  void testBuyPathNoAsset() throws Exception {
+    server.enqueue(found());
+    FlyoverBuyer buyer = buyer();
+    Path path = tiny4();
+    IOException e = assertThrows(IOException.class, () -> buyer.buyPath(path, 1000, START, 10));
+    assertEquals("No asset for 1-ff00:0:112 0>1 with 1000 kbit/s", e.getMessage());
+    assertEquals(1, server.getRequestCount()); // only the first search
+  }
+
+  /**
+   * The cheapest asset by unit price x bandwidth x seconds, after rounding, for the first AS. Asked
+   * for 15 s of 1000 kbit/s: A costs 2 x 1200 x 20 = 48000, B 1 x 1700 x 30 = 51000, D 1 x 2500 x
+   * 20 = 50000, and C ends before the rounded window. Each shortcut picks another one: unit price
+   * alone or no rounding B, no minimum bandwidth D, no window check C.
+   */
+  @Test
+  void testBuyCheapest() throws Exception {
+    server.enqueue(
+        found(
+            asset(1, 2, 10, 1200, START + 3600),
+            asset(2, 1, 30, 1700, START + 3600),
+            asset(3, 1, 10, 0, START + 15),
+            asset(4, 1, 10, 2500, START + 3600)));
+    server.enqueue(found(asset(5, 1, 10, 0, START + 3600)));
+    server.enqueue(found(asset(6, 1, 10, 0, START + 3600)));
+    enqueuePurchase(3);
+
+    Flyover[] flyovers = buyer().buyPath(tiny4(), 1000, START, 15);
+    assertEquals(20, flyovers[0].getDuration()); // the window bought, which the AS derives Ak over
+    for (int i = 0; i < 3; i++) {
+      server.takeRequest(); // the searches
+    }
+    Marketplace.BuyAsset order =
+        Marketplace.BuyAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray())
+            .getAssets(0);
+    assertEquals(asset(1, 2, 10, 1200, START + 3600).getAssetId(), order.getAssetId());
+    assertEquals(1200, order.getBandwidthExact());
+    assertEquals(START + 20, order.getStopsAtExactly().getSeconds());
+  }
+
+  /** A reservation that does not fit a flyover is the marketplace's fault: an IOException. */
+  @Test
+  void testBuyPathUnusableReservation() throws Exception {
+    for (int i = 0; i < 3; i++) {
+      server.enqueue(found(asset(i, 1, 10, 0, START + 3600)));
+    }
+    server.enqueue(protoResponse(bought(3)));
+    server.enqueue(redeemed(RES_ID, new byte[15]));
+    FlyoverBuyer buyer = buyer();
+    Path path = tiny4();
+    IOException e = assertThrows(IOException.class, () -> buyer.buyPath(path, 1000, START, 10));
+    assertTrue(e.getMessage().contains("ak must be 16 bytes"), e.getMessage());
+  }
+
+  /** The tiny4 path 112 -> 110 -> 111 with the interfaces the control service reports for it. */
+  private static Path tiny4() {
+    return path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41);
+  }
+
   /** A request path with the interfaces the control service reports, as (ISD-AS, ID) pairs. */
   static Path path(byte[] raw, long... isdAsAndId) {
     PathMetadata.Builder metadata = PathMetadata.newBuilder().setRaw(raw.clone());
@@ -177,55 +184,28 @@ class FlyoverBuyerTest {
 
   /** Buys a path of n ASes from a marketplace with an asset for each; answer i gets RES_ID + i. */
   private Flyover[] buyPath(Path path, int n) throws IOException {
-    Marketplace.BuyAssetsResponse.Builder bought = Marketplace.BuyAssetsResponse.newBuilder();
     for (int i = 0; i < n; i++) {
       server.enqueue(found(asset(i, 1, 10, 0, START + 3600)));
-      bought.addAssets(Marketplace.BoughtAsset.newBuilder().setAssetId(boughtId(i)));
     }
-    server.enqueue(protoResponse(bought.build()));
-    for (int i = 0; i < n; i++) {
-      server.enqueue(redeemed(RES_ID + i, new byte[16]));
-    }
+    enqueuePurchase(n);
     return buyer().buyPath(path, 1000, START, 10);
   }
 
-  /**
-   * The cheapest asset by unit price x bandwidth x seconds, after rounding. Asked for 15 s of 1000
-   * kbit/s: A costs 2 x 1200 x 20 = 48000, B 1 x 1700 x 30 = 51000, D 1 x 2500 x 20 = 50000, and C
-   * ends before the rounded window. Each shortcut picks another one: unit price alone or no
-   * rounding B, no minimum bandwidth D, no window check C.
-   */
-  @Test
-  void testBuyCheapest() throws Exception {
-    server.enqueue(
-        found(
-            asset(1, 2, 10, 1200, START + 3600),
-            asset(2, 1, 30, 1700, START + 3600),
-            asset(3, 1, 10, 0, START + 15),
-            asset(4, 1, 10, 2500, START + 3600)));
-    server.enqueue(protoResponse(BUY_RESPONSE));
-    server.enqueue(redeemed(RES_ID, new byte[16]));
-
-    Flyover flyover = buyer().buy(IA_112, 0, 1, 1000, START, 15);
-    assertEquals(20, flyover.getDuration()); // the window bought, which the AS derives Ak over
-    server.takeRequest(); // the search
-    Marketplace.BuyAsset order =
-        Marketplace.BuyAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray())
-            .getAssets(0);
-    assertEquals(asset(1, 2, 10, 1200, START + 3600).getAssetId(), order.getAssetId());
-    assertEquals(1200, order.getBandwidthExact());
-    assertEquals(START + 20, order.getStopsAtExactly().getSeconds());
+  /** After the searches: one purchase of n assets, then their n redemptions. */
+  private void enqueuePurchase(int n) {
+    server.enqueue(protoResponse(bought(n)));
+    for (int i = 0; i < n; i++) {
+      server.enqueue(redeemed(RES_ID + i, new byte[16]));
+    }
   }
 
-  /** A reservation that does not fit a flyover is the marketplace's fault: an IOException. */
-  @Test
-  void testBuyUnusableReservation() throws Exception {
-    server.enqueue(found(asset(1, 1, 10, 0, START + 3600)));
-    server.enqueue(protoResponse(BUY_RESPONSE));
-    server.enqueue(redeemed(RES_ID, new byte[15]));
-    FlyoverBuyer buyer = buyer();
-    IOException e = assertThrows(IOException.class, () -> buyer.buy(IA_112, 0, 1, 1000, START, 10));
-    assertTrue(e.getMessage().contains("ak must be 16 bytes"), e.getMessage());
+  /** A purchase of n assets, with the IDs {@link #boughtId}. */
+  private static Marketplace.BuyAssetsResponse bought(int n) {
+    Marketplace.BuyAssetsResponse.Builder bought = Marketplace.BuyAssetsResponse.newBuilder();
+    for (int i = 0; i < n; i++) {
+      bought.addAssets(Marketplace.BoughtAsset.newBuilder().setAssetId(boughtId(i)));
+    }
+    return bought.build();
   }
 
   /** An asset like those on tiny4: 1 Gbit/s, at least 10 s, from now until stopsAt. */
@@ -257,6 +237,7 @@ class FlyoverBuyerTest {
         Marketplace.RedeemAssetResponse.newBuilder()
             .setAuthenticationKey(com.google.protobuf.ByteString.copyFrom(key))
             .setReservationId(resId)
+            .setBwDataplaneEncoding(276) // 1000 kbit/s, as captured on tiny4
             .build());
   }
 
@@ -272,12 +253,6 @@ class FlyoverBuyerTest {
     server.start();
     MarketplaceClient client = new MarketplaceClient(server.url("/").toString(), "test-jwt");
     return new FlyoverBuyer(client, 100000);
-  }
-
-  private void assertRequest(String method, String body) throws InterruptedException {
-    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
-    assertEquals("/proto.hummingbird.v1.MarketplaceService/" + method, request.getPath());
-    assertArrayEquals(fromHex(body), request.getBody().readByteArray()); // the same as curl
   }
 
   private static MockResponse protoResponse(String hex) {

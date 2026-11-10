@@ -43,6 +43,8 @@ import org.scion.jpan.proto.hummingbird.MarketplaceServiceGrpc;
 /**
  * Talks to a Hummingbird marketplace with the Connect protocol: every call is an HTTPS POST of a
  * protobuf message from marketplace.proto to /proto.hummingbird.v1.MarketplaceService/[method].
+ * Applications only create it and hand it to {@link FlyoverBuyer}; the calls themselves stay inside
+ * this package, so no generated protobuf class becomes part of JPAN's API.
  */
 public final class MarketplaceClient {
 
@@ -86,7 +88,7 @@ public final class MarketplaceClient {
   }
 
   /** The attributes of the marketplace, for example its currency. */
-  public Marketplace.MarketplaceInfoResponse info() throws IOException {
+  Marketplace.MarketplaceInfoResponse info() throws IOException {
     byte[] request = Marketplace.MarketplaceInfoRequest.getDefaultInstance().toByteArray();
     return Marketplace.MarketplaceInfoResponse.parseFrom(post("Info", request));
   }
@@ -103,7 +105,7 @@ public final class MarketplaceClient {
    * @param duration length of the time window in seconds
    * @throws IOException also if there are more than {@value #MAX_PAGES} pages
    */
-  public List<Marketplace.SearchAsset> searchAssets(
+  List<Marketplace.SearchAsset> searchAssets(
       long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
       throws IOException {
     List<Marketplace.SearchAsset> assets = new ArrayList<>();
@@ -139,7 +141,7 @@ public final class MarketplaceClient {
    * @param startTime absolute Unix seconds
    * @param duration length of the part in seconds
    */
-  public static Marketplace.BuyAsset order(
+  static Marketplace.BuyAsset order(
       ByteString assetId, int bandwidth, long startTime, int duration) {
     return Marketplace.BuyAsset.newBuilder()
         .setAssetId(assetId)
@@ -158,7 +160,7 @@ public final class MarketplaceClient {
    * @return the IDs of the bought assets, in the order of the request, and the cost
    * @throws IOException also if the marketplace returns fewer assets than requested
    */
-  public Marketplace.BuyAssetsResponse buyAssets(List<Marketplace.BuyAsset> assets, long maxPrice)
+  Marketplace.BuyAssetsResponse buyAssets(List<Marketplace.BuyAsset> assets, long maxPrice)
       throws IOException {
     byte[] request =
         Marketplace.BuyAssetsRequest.newBuilder()
@@ -182,7 +184,7 @@ public final class MarketplaceClient {
    * @param assetId the ID of a bought interface-pair asset, as {@link #buyAssets} returns it
    * @return the authentication key, the reservation ID and the bandwidth as a codepoint
    */
-  public Marketplace.RedeemAssetResponse redeemAsset(ByteString assetId) throws IOException {
+  Marketplace.RedeemAssetResponse redeemAsset(ByteString assetId) throws IOException {
     byte[] request =
         Marketplace.RedeemAssetRequest.newBuilder().setIfPairAssetId(assetId).build().toByteArray();
     Marketplace.RedeemAssetResponse response =
