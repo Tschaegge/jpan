@@ -14,6 +14,7 @@
 
 package org.scion.jpan.hummingbird;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
@@ -23,6 +24,7 @@ import java.net.InetAddress;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import javax.net.ssl.SSLContext;
@@ -43,6 +45,9 @@ import org.scion.jpan.proto.hummingbird.MarketplaceServiceGrpc;
  * protobuf message from marketplace.proto to /proto.hummingbird.v1.MarketplaceService/[method].
  */
 public final class MarketplaceClient {
+
+  /** Upper bound for the pages of one search, so a broken marketplace cannot loop forever. */
+  static final int MAX_PAGES = 100;
 
   private static final String SERVICE_PATH = "/" + MarketplaceServiceGrpc.SERVICE_NAME + "/";
 
@@ -88,7 +93,7 @@ public final class MarketplaceClient {
 
   /**
    * The assets for sale at one interface pair of an AS that have the bandwidth for the whole time
-   * window. Only the first page of the results.
+   * window, from all pages of the results.
    *
    * @param isdAs the AS, as {@link org.scion.jpan.ScionUtil#parseIA} returns it
    * @param ingress interface in travel direction, 0 if the reservation starts in this AS
@@ -96,24 +101,34 @@ public final class MarketplaceClient {
    * @param bandwidth in kbit/s, not a codepoint
    * @param startTime absolute Unix seconds
    * @param duration length of the time window in seconds
+   * @throws IOException also if there are more than {@value #MAX_PAGES} pages
    */
   public List<Marketplace.SearchAsset> searchAssets(
       long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
       throws IOException {
-    byte[] request =
-        Marketplace.SearchAssetsRequest.newBuilder()
-            .setOwned(false)
-            .setIa(isdAs)
-            .setIfIdIngress(ingress)
-            .setIfIdEgress(egress)
-            .setMinRequiredBw(bandwidth)
-            .setStartsAtLatest(Timestamp.newBuilder().setSeconds(startTime).build())
-            .setStopsAtEarliest(Timestamp.newBuilder().setSeconds(startTime + duration).build())
-            .build()
-            .toByteArray();
-    Marketplace.SearchAssetsResponse response =
-        Marketplace.SearchAssetsResponse.parseFrom(post("SearchAssets", request));
-    return response.getAssetsList();
+    List<Marketplace.SearchAsset> assets = new ArrayList<>();
+    // The marketplace counts pages from 0 and says whether another one follows.
+    for (int page = 0; page < MAX_PAGES; page++) {
+      byte[] request =
+          Marketplace.SearchAssetsRequest.newBuilder()
+              .setOwned(false)
+              .setIa(isdAs)
+              .setIfIdIngress(ingress)
+              .setIfIdEgress(egress)
+              .setMinRequiredBw(bandwidth)
+              .setStartsAtLatest(Timestamp.newBuilder().setSeconds(startTime).build())
+              .setStopsAtEarliest(Timestamp.newBuilder().setSeconds(startTime + duration).build())
+              .setPage(page)
+              .build()
+              .toByteArray();
+      Marketplace.SearchAssetsResponse response =
+          Marketplace.SearchAssetsResponse.parseFrom(post("SearchAssets", request));
+      assets.addAll(response.getAssetsList());
+      if (!response.getHasMore()) {
+        return assets;
+      }
+    }
+    throw new IOException("Marketplace has more than " + MAX_PAGES + " pages of assets");
   }
 
   /**
@@ -196,11 +211,24 @@ public final class MarketplaceClient {
       if (response.isSuccessful()) {
         return response.body().bytes();
       }
-      String text = response.body().string();
-      JsonObject error = JsonParser.parseString(text).getAsJsonObject();
+      String error = describeError(response.code(), response.body().string());
+      throw new IOException("Marketplace call " + method + " failed: " + error);
+    }
+  }
+
+  /**
+   * The code and message of a Connect error, {@code {"code": ..., "message": ...}}. A proxy or a
+   * crashed server may send something else, then the HTTP status and the start of the body.
+   */
+  private static String describeError(int httpStatus, String body) {
+    try {
+      JsonObject error = JsonParser.parseString(body).getAsJsonObject();
       String code = error.get("code").getAsString();
-      String message = error.get("message").getAsString();
-      throw new IOException("Marketplace call " + method + " failed: " + code + ": " + message);
+      JsonElement message = error.get("message"); // optional in Connect
+      return message == null ? code : code + ": " + message.getAsString();
+    } catch (RuntimeException e) { // not JSON, not an object, or no code
+      String start = body.length() > 200 ? body.substring(0, 200) + "..." : body;
+      return "HTTP " + httpStatus + ": " + start;
     }
   }
 

@@ -16,7 +16,9 @@ package org.scion.jpan.hummingbird;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.List;
 import org.scion.jpan.Path;
+import org.scion.jpan.PathMetadata;
 import org.scion.jpan.PathPolicy;
 import org.scion.jpan.ScionService;
 import org.scion.jpan.ScionSocketAddress;
@@ -28,11 +30,12 @@ import org.slf4j.LoggerFactory;
  * A path selector for connected channels that sends with Hummingbird reservations. When the channel
  * connects, it buys a flyover for every AS of the best SCION path in one purchase, and then returns
  * that path as a {@link HummingbirdRequestPath} for every packet. Shortly before the reservations
- * expire, it buys new ones and switches to them. Use it with {@code
+ * expire, it buys new ones and switches to them. When the superclass picks another SCION path, it
+ * buys for it if the route changed, and keeps the flyovers otherwise. Use it with {@code
  * ScionDatagramChannel.newBuilder().pathSelectorForConnect(...)}.
  *
- * <p>Not yet: buying again as soon as the SCION path changes, and what to send with once a renewal
- * has failed until the old reservations expired.
+ * <p>Purchases run on the selector timer, which all path selectors of the JVM share: while one
+ * purchase waits for the marketplace, no other selector refreshes its paths.
  */
 public class HummingbirdPathSelector extends PathSelectorWithRefresh {
 
@@ -50,8 +53,12 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   private final int renewBefore;
   // Written by open() and the timer, read by every write() of the channel.
   private volatile HummingbirdRequestPath path;
-  // When the reservations of path expire, in Unix seconds.
+  // What path was built from, to rebuild it when the SCION path gets new bytes for the same route.
+  private volatile Path scionPath;
+  private volatile Flyover[] flyovers;
+  // When the first reservation of path expires, in Unix seconds.
   private volatile long expiry;
+  private boolean expiryLogged; // only buy() and renew(), which never run at the same time
 
   /**
    * @param service finds the SCION paths
@@ -111,20 +118,39 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   }
 
   /**
-   * Runs every {@link #CHECK_INTERVAL_MS} on the selector's timer. Once the reservations expire in
-   * less than renewBefore seconds, buys new ones for the current SCION path and switches to them.
-   * If the purchase fails, the old path stays and the next run tries again.
+   * Runs every {@link #CHECK_INTERVAL_MS} on the selector's timer. If the selector's SCION path
+   * changed, it either keeps the flyovers (same route, new bytes) or buys new ones (new route).
+   * Once the reservations expire in less than renewBefore seconds, it buys new ones. A failed
+   * purchase keeps the old path, and the next run tries again; after expiry the routers demote
+   * every packet.
    */
-  private void renew() {
-    long now = System.currentTimeMillis() / 1000;
-    if (now < expiry - renewBefore) {
-      return; // the reservations still last long enough
+  private synchronized void renew() {
+    if (!isOpen()) {
+      return; // closed while this run waited for the lock
     }
+    long now = System.currentTimeMillis() / 1000;
     try {
-      buy();
+      Path current = super.getPath(); // refreshed by the superclass timer
+      if (current != null && scionPath != null && !current.equals(scionPath)) {
+        if (sameRoute(current, scionPath)) {
+          // Ak covers the interfaces and the window, not the SCION hop fields: no purchase.
+          path = new HummingbirdRequestPath(current, flyovers);
+          scionPath = current;
+        } else {
+          buy();
+        }
+      }
+      if (now >= expiry - renewBefore) {
+        buy();
+      }
     } catch (Exception e) {
       // Not only IOException: any exception that leaves this method stops the timer task for good.
-      LOG.warn("Renewing the Hummingbird reservations failed, trying again in 1 s", e);
+      LOG.warn(
+          "Renewing the Hummingbird reservations failed, trying again in 1 s: {}", e.toString());
+    }
+    if (path != null && now >= expiry && !expiryLogged) {
+      LOG.warn("Hummingbird reservations expired, the routers demote every packet until renewed");
+      expiryLogged = true;
     }
   }
 
@@ -133,21 +159,59 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
    * no path to the destination; the channel then reports it on write().
    */
   private void buy() throws IOException {
-    Path scionPath = super.getPath(); // not getPath(): that is the Hummingbird path
-    if (scionPath == null) {
+    Path current = super.getPath(); // not getPath(): that is the Hummingbird path
+    if (current == null) {
       return;
     }
     // In the past: the packet carries BaseTimestamp - start as an unsigned offset, so a future
     // start wraps it and the routers derive a different Ak and drop every packet.
     long start = System.currentTimeMillis() / 1000 - BACKDATE;
-    Flyover[] flyovers = buyer.buyPath(scionPath, bandwidth, start, duration);
-    path = new HummingbirdRequestPath(scionPath, flyovers);
-    expiry = start + duration;
+    Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration);
+    path = new HummingbirdRequestPath(current, bought);
+    scionPath = current;
+    flyovers = bought;
+    expiry = expiryOf(bought);
+    expiryLogged = false;
+  }
+
+  /** When the first of the flyovers expires. Each AS may have rounded the duration up. */
+  private static long expiryOf(Flyover[] flyovers) {
+    long first = Long.MAX_VALUE;
+    for (Flyover f : flyovers) {
+      if (f != null) {
+        first = Math.min(first, f.getStartTime() + f.getDuration());
+      }
+    }
+    return first;
+  }
+
+  /** Whether both paths cross the same ASes through the same interfaces. */
+  private static boolean sameRoute(Path a, Path b) {
+    List<PathMetadata.PathInterface> x = a.getMetadata().getInterfaces();
+    List<PathMetadata.PathInterface> y = b.getMetadata().getInterfaces();
+    if (x.size() != y.size()) {
+      return false;
+    }
+    for (int i = 0; i < x.size(); i++) {
+      if (x.get(i).getIsdAs() != y.get(i).getIsdAs() || x.get(i).getId() != y.get(i).getId()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Also forgets the path, so that {@link #getPath()} returns null afterwards. */
+  @Override
+  public synchronized void close() {
+    super.close();
+    path = null;
+    scionPath = null;
+    flyovers = null;
   }
 
   /**
-   * @return the Hummingbird path with the bought flyovers, null before {@link #open} or if there is
-   *     no path to the destination
+   * @return the Hummingbird path with the bought flyovers, null before {@link #open}, after {@link
+   *     #close} or if there is no path to the destination
    */
   @Override
   public Path getPath() {

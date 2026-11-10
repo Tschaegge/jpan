@@ -197,6 +197,34 @@ class MarketplaceClientTest {
     assertTrue(e.getMessage().contains("missing bearer token"), e.getMessage());
   }
 
+  /** A proxy in between may answer with HTML instead of a Connect error. */
+  @Test
+  void testErrorNotConnect() {
+    start(MARKETPLACE_CERT);
+    server.enqueue(new MockResponse().setResponseCode(502).setBody("<html>Bad Gateway</html>"));
+    IOException e = assertThrows(IOException.class, () -> client(MARKETPLACE_CERT).info());
+    assertTrue(e.getMessage().contains("HTTP 502: <html>Bad Gateway</html>"), e.getMessage());
+  }
+
+  /** Page 0 says there is more, so the client asks for page 1, which says there is not. */
+  @Test
+  void testSearchAssetsPages() throws Exception {
+    start(MARKETPLACE_CERT);
+    for (boolean hasMore : new boolean[] {true, false}) {
+      Marketplace.SearchAssetsResponse page =
+          Marketplace.SearchAssetsResponse.newBuilder()
+              .addAssets(Marketplace.SearchAsset.getDefaultInstance())
+              .setHasMore(hasMore)
+              .build();
+      server.enqueue(protoResponse(okio.ByteString.of(page.toByteArray()).hex()));
+    }
+    assertEquals(2, client(MARKETPLACE_CERT).searchAssets(1, 0, 1, 1000, 1793705366L, 10).size());
+    for (int page = 0; page < 2; page++) {
+      byte[] body = server.takeRequest(2, TimeUnit.SECONDS).getBody().readByteArray();
+      assertEquals(page, Marketplace.SearchAssetsRequest.parseFrom(body).getPage());
+    }
+  }
+
   /** A server with any other certificate, even one for the same name, is not the marketplace. */
   @Test
   void testRejectsOtherCertificate() {

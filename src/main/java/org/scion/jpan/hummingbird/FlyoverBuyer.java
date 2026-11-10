@@ -49,8 +49,9 @@ public final class FlyoverBuyer {
   }
 
   /**
-   * Buys one flyover for one AS from the first asset that has the bandwidth for the whole time
-   * window.
+   * Buys one flyover for one AS from the cheapest asset that has the bandwidth for the whole time
+   * window. The flyover may last longer than duration, see {@link Flyover#getDuration()}: the
+   * window is rounded up to the asset's minimum duration and granularity.
    *
    * @param isdAs the AS, as {@link org.scion.jpan.ScionUtil#parseIA} returns it
    * @param ingress interface in travel direction, 0 if the reservation starts in this AS
@@ -68,17 +69,21 @@ public final class FlyoverBuyer {
         chooseOrder(isdAs, ingress, egress, bandwidth, startTime, duration);
     Marketplace.BuyAssetsResponse bought =
         marketplace.buyAssets(Collections.singletonList(order), maxPrice);
-    return redeem(bought.getAssets(0).getAssetId(), ingress, egress, startTime, duration);
+    return redeem(bought.getAssets(0).getAssetId(), ingress, egress, order);
   }
 
   /**
    * Buys one flyover for every AS of a SCION path in a single purchase and redeems them. The
-   * purchase is all or nothing: if it would cost more than maxPrice, nothing is bought.
+   * purchase is all or nothing: if it would cost more than maxPrice, nothing is bought. Redeeming
+   * takes one call per flyover, since each AS derives the key for its own flyover. If one call
+   * fails, no flyover is returned, but everything stays paid: an asset whose redemption failed at
+   * the AS can be redeemed again, one already redeemed only fetched as a reservation, which this
+   * class does not do yet.
    *
    * @param scionPath a {@link org.scion.jpan.RequestPath} from JPAN's path lookup
    * @param bandwidth in kbit/s, not a codepoint, the same for every AS
    * @param startTime absolute Unix seconds, in the past or the router drops the packets
-   * @param duration length of the reservations in seconds
+   * @param duration length of the reservations in seconds, at least; each AS may round it up
    * @return one slot per hop field, ready for {@link HummingbirdRequestPath}. null in the second
    *     hop field of an AS at a segment change, which carries no flyover (Appendix A.5)
    * @throws IOException if an AS has no fitting asset, the purchase costs more than maxPrice or a
@@ -97,8 +102,8 @@ public final class FlyoverBuyer {
     // The hop fields carry no ISD-AS, so it comes from the metadata.
     List<PathMetadata.PathInterface> interfaces = scionPath.getMetadata().getInterfaces();
 
-    List<Marketplace.BuyAsset> orders = new ArrayList<Marketplace.BuyAsset>();
-    List<Integer> slots = new ArrayList<Integer>(); // slots.get(n) is the slot of orders.get(n)
+    List<Marketplace.BuyAsset> orders = new ArrayList<>();
+    List<Integer> slots = new ArrayList<>(); // slots.get(n) is the slot of orders.get(n)
     int asCount = 0; // ASes so far, not slots: a crossover AS has two slots
     for (int i = 0; i < flyovers.length; i++) {
       if (path.getCrossOver(i) == 1) {
@@ -139,34 +144,42 @@ public final class FlyoverBuyer {
               bought.getAssets(n).getAssetId(),
               path.getFlyoverIngress(slot),
               path.getFlyoverEgress(slot),
-              startTime,
-              duration);
+              orders.get(n));
     }
     return flyovers;
   }
 
   /**
    * Redeems a bought asset and turns the reservation into a flyover. The marketplace does not send
-   * the interfaces or the time window back, so they come from the order.
+   * the interfaces or the time window back, so they come from the order. The window must be the one
+   * bought, which may be longer than the one asked for: the AS derives Ak over it.
    *
    * @param assetId the ID from {@link MarketplaceClient#buyAssets}, not the one from the search
+   * @throws IOException also if the reservation does not fit a flyover hop field
    */
-  private Flyover redeem(ByteString assetId, int ingress, int egress, long startTime, int duration)
+  private Flyover redeem(ByteString assetId, int ingress, int egress, Marketplace.BuyAsset order)
       throws IOException {
     Marketplace.RedeemAssetResponse reservation = marketplace.redeemAsset(assetId);
-    return new Flyover(
-        ingress,
-        egress,
-        reservation.getReservationId(),
-        reservation.getBwDataplaneEncoding(),
-        startTime,
-        duration,
-        reservation.getAuthenticationKey().toByteArray());
+    long start = order.getStartsAtExactly().getSeconds();
+    long duration = order.getStopsAtExactly().getSeconds() - start;
+    try {
+      return new Flyover(
+          ingress,
+          egress,
+          reservation.getReservationId(),
+          reservation.getBwDataplaneEncoding(),
+          start,
+          (int) duration,
+          reservation.getAuthenticationKey().toByteArray());
+    } catch (IllegalArgumentException e) {
+      throw new IOException("Marketplace returned an unusable reservation: " + e.getMessage(), e);
+    }
   }
 
   /**
-   * Searches for an asset and orders the part of it that is needed. Search and order take the same
-   * bandwidth and time window, so the chosen asset always covers what is ordered.
+   * Searches for an asset and orders the part of it that is needed: of the assets that still cover
+   * the window once it is rounded up to their minimum duration and granularity, the cheapest. The
+   * order takes that rounded window and at least the asset's minimum bandwidth.
    *
    * @throws IOException if no asset fits or the search fails
    */
@@ -175,13 +188,63 @@ public final class FlyoverBuyer {
       throws IOException {
     List<Marketplace.SearchAsset> assets =
         marketplace.searchAssets(isdAs, ingress, egress, bandwidth, startTime, duration);
-    if (assets.isEmpty()) {
+    Marketplace.SearchAsset cheapest = null;
+    long cheapestPrice = Long.MAX_VALUE;
+    long cheapestDuration = 0;
+    long cheapestBandwidth = 0;
+    for (Marketplace.SearchAsset asset : assets) {
+      long billable = billableDuration(asset, duration);
+      long billableBandwidth = Math.max(bandwidth, Integer.toUnsignedLong(asset.getBandwidthMin()));
+      boolean fits =
+          billable > 0
+              && billable <= 0xFFFF // ResDuration has 16 bits in the flyover hop field
+              && asset.getStopsAt().getSeconds() >= startTime + billable
+              && Integer.toUnsignedLong(asset.getBandwidth()) >= billableBandwidth;
+      long price = price(asset, billableBandwidth, billable);
+      if (fits && price < cheapestPrice) { // on a tie the first, as the marketplace sorts by ID
+        cheapest = asset;
+        cheapestPrice = price;
+        cheapestDuration = billable;
+        cheapestBandwidth = billableBandwidth;
+      }
+    }
+    if (cheapest == null) {
       throw new IOException(
           String.format(
               "No asset for %s %d>%d with %d kbit/s",
               ScionUtil.toStringIA(isdAs), ingress, egress, bandwidth));
     }
-    // Every asset found covers the window, so any fits. Choosing the cheapest is not done yet.
-    return MarketplaceClient.order(assets.get(0).getAssetId(), bandwidth, startTime, duration);
+    return MarketplaceClient.order(
+        cheapest.getAssetId(), (int) cheapestBandwidth, startTime, (int) cheapestDuration);
+  }
+
+  /**
+   * The seconds an asset bills and a reservation from it lasts: at least the asset's minimum
+   * duration, rounded up to its granularity.
+   *
+   * @return 0 if the asset has no granularity, so it cannot be bought
+   */
+  static long billableDuration(Marketplace.SearchAsset asset, int duration) {
+    long granularity = Integer.toUnsignedLong(asset.getTimeGranularity());
+    if (granularity == 0) {
+      return 0;
+    }
+    long atLeast = Math.max(duration, Integer.toUnsignedLong(asset.getTimeMinDuration()));
+    return (atLeast + granularity - 1) / granularity * granularity;
+  }
+
+  /**
+   * The price the marketplace computes for an order: unit price times bandwidth times seconds. It
+   * adds its transaction fee on top, so the amount charged is higher.
+   *
+   * @return {@link Long#MAX_VALUE} if the product overflows, so such an asset is never the cheapest
+   */
+  static long price(Marketplace.SearchAsset asset, long bandwidth, long billableDuration) {
+    try {
+      long unitPrice = Integer.toUnsignedLong(asset.getPrice());
+      return Math.multiplyExact(Math.multiplyExact(unitPrice, bandwidth), billableDuration);
+    } catch (ArithmeticException e) {
+      return Long.MAX_VALUE;
+    }
   }
 }

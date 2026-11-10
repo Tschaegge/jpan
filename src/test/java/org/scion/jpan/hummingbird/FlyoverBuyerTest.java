@@ -17,9 +17,11 @@ package org.scion.jpan.hummingbird;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.protobuf.MessageLite;
+import com.google.protobuf.Timestamp;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -133,6 +135,11 @@ class FlyoverBuyerTest {
     assertEquals(RES_ID + 1, flyovers[1].getResID());
     assertNull(flyovers[2]);
     assertEquals(RES_ID + 2, flyovers[3].getResID());
+    for (int n = 0; n < 3; n++) { // each redeem takes the n-th asset of the purchase, not the first
+      Marketplace.RedeemAssetRequest redeem =
+          Marketplace.RedeemAssetRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+      assertEquals(boughtId(n), redeem.getIfPairAssetId());
+    }
     // Throws if a flyover is in a slot whose interfaces differ from its own.
     new HummingbirdRequestPath(path, flyovers);
   }
@@ -169,25 +176,87 @@ class FlyoverBuyerTest {
 
   /** Buys a path of n ASes from a marketplace with an asset for each; answer i gets RES_ID + i. */
   private Flyover[] buyPath(Path path, int n) throws IOException {
-    Marketplace.SearchAssetsResponse found =
-        Marketplace.SearchAssetsResponse.newBuilder()
-            .addAssets(Marketplace.SearchAsset.getDefaultInstance())
-            .build();
     Marketplace.BuyAssetsResponse.Builder bought = Marketplace.BuyAssetsResponse.newBuilder();
     for (int i = 0; i < n; i++) {
-      server.enqueue(protoResponse(found));
-      bought.addAssets(Marketplace.BoughtAsset.getDefaultInstance());
+      server.enqueue(found(asset(i, 1, 10, 0, START + 3600)));
+      bought.addAssets(Marketplace.BoughtAsset.newBuilder().setAssetId(boughtId(i)));
     }
     server.enqueue(protoResponse(bought.build()));
     for (int i = 0; i < n; i++) {
-      server.enqueue(
-          protoResponse(
-              Marketplace.RedeemAssetResponse.newBuilder()
-                  .setAuthenticationKey(com.google.protobuf.ByteString.copyFrom(new byte[16]))
-                  .setReservationId(RES_ID + i)
-                  .build()));
+      server.enqueue(redeemed(RES_ID + i, new byte[16]));
     }
     return buyer().buyPath(path, 1000, START, 10);
+  }
+
+  /**
+   * The cheapest asset by unit price x bandwidth x seconds, after rounding. Asked for 15 s of 1000
+   * kbit/s: A costs 2 x 1200 x 20 = 48000, B 1 x 1700 x 30 = 51000, D 1 x 2500 x 20 = 50000, and C
+   * ends before the rounded window. Each shortcut picks another one: unit price alone or no
+   * rounding B, no minimum bandwidth D, no window check C.
+   */
+  @Test
+  void testBuyCheapest() throws Exception {
+    server.enqueue(
+        found(
+            asset(1, 2, 10, 1200, START + 3600),
+            asset(2, 1, 30, 1700, START + 3600),
+            asset(3, 1, 10, 0, START + 15),
+            asset(4, 1, 10, 2500, START + 3600)));
+    server.enqueue(protoResponse(BUY_RESPONSE));
+    server.enqueue(redeemed(RES_ID, new byte[16]));
+
+    Flyover flyover = buyer().buy(IA_112, 0, 1, 1000, START, 15);
+    assertEquals(20, flyover.getDuration()); // the window bought, which the AS derives Ak over
+    server.takeRequest(); // the search
+    Marketplace.BuyAsset order =
+        Marketplace.BuyAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray())
+            .getAssets(0);
+    assertEquals(asset(1, 2, 10, 1200, START + 3600).getAssetId(), order.getAssetId());
+    assertEquals(1200, order.getBandwidthExact());
+    assertEquals(START + 20, order.getStopsAtExactly().getSeconds());
+  }
+
+  /** A reservation that does not fit a flyover is the marketplace's fault: an IOException. */
+  @Test
+  void testBuyUnusableReservation() throws Exception {
+    server.enqueue(found(asset(1, 1, 10, 0, START + 3600)));
+    server.enqueue(protoResponse(BUY_RESPONSE));
+    server.enqueue(redeemed(RES_ID, new byte[15]));
+    FlyoverBuyer buyer = buyer();
+    IOException e = assertThrows(IOException.class, () -> buyer.buy(IA_112, 0, 1, 1000, START, 10));
+    assertTrue(e.getMessage().contains("ak must be 16 bytes"), e.getMessage());
+  }
+
+  /** An asset like those on tiny4: 1 Gbit/s, at least 10 s, from now until stopsAt. */
+  static Marketplace.SearchAsset asset(
+      int id, int price, int granularity, int bandwidthMin, long stopsAt) {
+    return Marketplace.SearchAsset.newBuilder()
+        .setAssetId(com.google.protobuf.ByteString.copyFrom(new byte[] {(byte) id}))
+        .setBandwidth(1000000)
+        .setBandwidthMin(bandwidthMin)
+        .setTimeGranularity(granularity)
+        .setTimeMinDuration(10)
+        .setStopsAt(Timestamp.newBuilder().setSeconds(stopsAt))
+        .setPrice(price)
+        .build();
+  }
+
+  static MockResponse found(Marketplace.SearchAsset... assets) {
+    return protoResponse(
+        Marketplace.SearchAssetsResponse.newBuilder().addAllAssets(Arrays.asList(assets)).build());
+  }
+
+  /** The ID of the n-th asset a mock purchase returns: 20 + n, unlike any search ID. */
+  private static com.google.protobuf.ByteString boughtId(int n) {
+    return com.google.protobuf.ByteString.copyFrom(new byte[] {(byte) (20 + n)});
+  }
+
+  static MockResponse redeemed(int resId, byte[] key) {
+    return protoResponse(
+        Marketplace.RedeemAssetResponse.newBuilder()
+            .setAuthenticationKey(com.google.protobuf.ByteString.copyFrom(key))
+            .setReservationId(resId)
+            .build());
   }
 
   private void assertSearch(long isdAs, int ingress, int egress) throws Exception {
@@ -216,7 +285,7 @@ class FlyoverBuyerTest {
         .setBody(new Buffer().write(ByteString.decodeHex(hex)));
   }
 
-  private static MockResponse protoResponse(MessageLite message) {
+  static MockResponse protoResponse(MessageLite message) {
     return protoResponse(ByteString.of(message.toByteArray()).hex());
   }
 
