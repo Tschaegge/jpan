@@ -22,17 +22,20 @@ import org.scion.jpan.PathMetadata;
 import org.scion.jpan.PathPolicy;
 import org.scion.jpan.ScionService;
 import org.scion.jpan.ScionSocketAddress;
+import org.scion.jpan.selectors.PathSelector;
+import org.scion.jpan.selectors.PathSelectorFactory;
 import org.scion.jpan.selectors.PathSelectorWithRefresh;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * A path selector for connected channels that sends with Hummingbird reservations. When the channel
- * connects, it buys a flyover for every AS of the best SCION path in one purchase, and then returns
- * that path as a {@link HummingbirdRequestPath} for every packet. Shortly before the reservations
- * expire, it buys new ones and switches to them. When the superclass picks another SCION path, it
- * buys for it if the route changed, and keeps the flyovers otherwise. Use it with {@code
- * ScionDatagramChannel.newBuilder().pathSelectorForConnect(...)}.
+ * A path selector that sends with Hummingbird reservations. When the channel connects, it buys a
+ * flyover for every AS of the best SCION path in one purchase, and then returns that path as a
+ * {@link HummingbirdRequestPath} for every packet. Shortly before the reservations expire, it buys
+ * new ones and switches to them. When the superclass picks another SCION path, it buys for it if
+ * the route changed, and keeps the flyovers otherwise. Use it with {@code
+ * ScionDatagramChannel.newBuilder().pathSelectorForConnect(...)}, or through {@link Factory} for
+ * {@code send(buffer, address)} without connect.
  *
  * <p>Purchases run on the selector timer, which all path selectors of the JVM share: while one
  * purchase waits for the marketplace, no other selector refreshes its paths.
@@ -59,6 +62,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   // When the first reservation of path expires, in Unix seconds.
   private volatile long expiry;
   private boolean expiryLogged; // only buy() and renew(), which never run at the same time
+  private volatile boolean sentSinceBought;
 
   /**
    * @param service finds the SCION paths
@@ -88,16 +92,21 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       int duration,
       int renewBefore) {
     super(service, policy);
+    checkRenewBefore(duration, renewBefore);
+    this.buyer = buyer;
+    this.bandwidth = bandwidth;
+    this.duration = duration;
+    this.renewBefore = renewBefore;
+  }
+
+  /** The rule for renewBefore of {@link #create}, also checked by {@link Factory#create}. */
+  private static void checkRenewBefore(int duration, int renewBefore) {
     if (renewBefore <= 0 || renewBefore >= duration - BACKDATE) {
       throw new IllegalArgumentException(
           String.format(
               "renewBefore must be between 0 and %d s for %d s reservations, not %d",
               duration - BACKDATE, duration, renewBefore));
     }
-    this.buyer = buyer;
-    this.bandwidth = bandwidth;
-    this.duration = duration;
-    this.renewBefore = renewBefore;
   }
 
   /**
@@ -115,14 +124,17 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       throw new UncheckedIOException(e);
     }
     addScheduledTask(this::renew, CHECK_INTERVAL_MS, CHECK_INTERVAL_MS);
+    sentSinceBought = false;
   }
 
   /**
    * Runs every {@link #CHECK_INTERVAL_MS} on the selector's timer. If the selector's SCION path
    * changed, it either keeps the flyovers (same route, new bytes) or buys new ones (new route).
-   * Once the reservations expire in less than renewBefore seconds, it buys new ones. A failed
-   * purchase keeps the old path, and the next run tries again; after expiry the routers demote
-   * every packet.
+   * Once the reservations expire in less than renewBefore seconds, it buys new ones. It only buys
+   * if the application sent since the last purchase, which {@link #getPath()} notes for every
+   * packet: an idle selector lets its reservations expire and buys again within a second of the
+   * next packet. A failed purchase keeps the old path, and the next run tries again; after expiry
+   * the routers demote every packet.
    */
   private synchronized void renew() {
     if (!isOpen()) {
@@ -136,12 +148,14 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
           // Ak covers the interfaces and the window, not the SCION hop fields: no purchase.
           path = new HummingbirdRequestPath(current, flyovers);
           scionPath = current;
-        } else {
+        } else if (sentSinceBought) {
           buy();
+          sentSinceBought = false;
         }
       }
-      if (now >= expiry - renewBefore) {
+      if (now >= expiry - renewBefore && sentSinceBought) {
         buy();
+        sentSinceBought = false;
       }
     } catch (Exception e) {
       // Not only IOException: any exception that leaves this method stops the timer task for good.
@@ -215,6 +229,52 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
    */
   @Override
   public Path getPath() {
+    sentSinceBought = true;
     return path;
+  }
+
+  /**
+   * Makes a HummingbirdPathSelector for every destination of {@code send(buffer, address)} on a
+   * channel that is not connected, with {@code
+   * ScionDatagramChannel.newBuilder().pathSelectorsForSend(Factory.create(...))}. The channel keeps
+   * one selector per IP address and port. Each buys when the application first sends to its
+   * address, so that send waits for the purchase, and two addresses in the same AS cost two
+   * purchases. A failed purchase makes that send throw an UncheckedIOException. A selector the
+   * application no longer sends to renews at most once more.
+   */
+  public static class Factory extends PathSelectorFactory.AbstractPathSelectorFactory {
+
+    private final FlyoverBuyer buyer;
+    private final int bandwidth;
+    private final int duration;
+    private final int renewBefore;
+
+    protected Factory(
+        PathPolicy policy, FlyoverBuyer buyer, int bandwidth, int duration, int renewBefore) {
+      super(policy);
+      this.buyer = buyer;
+      this.bandwidth = bandwidth;
+      this.duration = duration;
+      this.renewBefore = renewBefore;
+    }
+
+    /**
+     * The parameters are those of {@link HummingbirdPathSelector#create}, without the service,
+     * which the channel passes to each selector.
+     *
+     * @throws IllegalArgumentException unless 0 &lt; renewBefore &lt; duration - 10, already here
+     *     rather than on the first send
+     */
+    public static PathSelectorFactory create(
+        PathPolicy policy, FlyoverBuyer buyer, int bandwidth, int duration, int renewBefore) {
+      checkRenewBefore(duration, renewBefore);
+      return new Factory(policy, buyer, bandwidth, duration, renewBefore);
+    }
+
+    @Override
+    public PathSelector createPathSelector(ScionService service) {
+      return HummingbirdPathSelector.create(
+          service, getDefaultPolicy(), buyer, bandwidth, duration, renewBefore);
+    }
   }
 }

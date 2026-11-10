@@ -32,6 +32,8 @@ import org.scion.jpan.ScionSocketAddress;
 import org.scion.jpan.ScionUtil;
 import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.proto.hummingbird.Marketplace;
+import org.scion.jpan.selectors.PathSelector;
+import org.scion.jpan.selectors.PathSelectorFactory;
 import org.scion.jpan.testutil.MockNetwork2;
 
 /**
@@ -141,6 +143,67 @@ class HummingbirdPathSelectorTest {
     }
   }
 
+  /**
+   * The selector renews only while the application sends, which it notices by getPath() calls; the
+   * test therefore watches the purchases through the marketplace, not through getPath(). 16 s
+   * reservations renewed 4 s ahead are due 2 to 3 s after a purchase. Three phases: one packet, so
+   * the first renewal happens; nothing sent for 3.5 s, so no renewal although one is due; one
+   * packet again, so the next purchase follows within a second or two.
+   */
+  @Test
+  void testRenewsOnlyWhileSending() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      HummingbirdPathSelector selector = selector(16, 4);
+      int requests = enqueuePurchase();
+      enqueuePurchase();
+      enqueuePurchase();
+      enqueuePurchase(); // spare, so that a wrong renewal does not wait for an answer
+      selector.open(REMOTE);
+      try {
+        selector.getPath(); // one packet
+        awaitRequests(2 * requests);
+        assertEquals(2 * requests, marketplace.getRequestCount(), "renewed while sending");
+
+        Thread.sleep(3500); // nothing sent
+        assertEquals(2 * requests, marketplace.getRequestCount(), "no purchase while idle");
+
+        selector.getPath(); // one packet after the pause
+        awaitRequests(3 * requests);
+        assertEquals(3 * requests, marketplace.getRequestCount(), "bought again once sending");
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
+   * The factory's selectors buy with the factory's values: the flyovers last the 16 s it was given.
+   * A wrong renewBefore fails in create(), not only when the channel makes the first selector.
+   */
+  @Test
+  void testFactory() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      FlyoverBuyer buyer = buyer();
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HummingbirdPathSelector.Factory.create(PathPolicy.MIN_HOPS, buyer, 1000, 16, 6));
+      PathSelectorFactory factory =
+          HummingbirdPathSelector.Factory.create(PathPolicy.MIN_HOPS, buyer, 1000, 16, 4);
+      PathSelector selector = factory.createPathSelector(Scion.defaultService());
+      assertInstanceOf(HummingbirdPathSelector.class, selector);
+      enqueuePurchase();
+      selector.open(REMOTE);
+      try {
+        HummingbirdPathRaw raw =
+            HummingbirdPathRaw.create(ByteBuffer.wrap(selector.getPath().getRawPath()));
+        assertTrue(raw.getHopField(0).isFlyover());
+        assertEquals(16, raw.getHopField(0).getResDuration());
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
   /** The path is renewed for the flyover that ends first: each AS may round the duration up. */
   @Test
   void testExpiryOf() {
@@ -192,12 +255,23 @@ class HummingbirdPathSelectorTest {
     return (lines - 3 * raw.getHopFieldCount()) / 2;
   }
 
+  /** Waits up to 5 s until the marketplace has received at least n requests. */
+  private void awaitRequests(int n) throws InterruptedException {
+    for (int i = 0; i < 50 && marketplace.getRequestCount() < n; i++) {
+      Thread.sleep(100);
+    }
+  }
+
   private HummingbirdPathSelector selector(int duration, int renewBefore) throws IOException {
+    return HummingbirdPathSelector.create(
+        Scion.defaultService(), PathPolicy.MIN_HOPS, buyer(), 1000, duration, renewBefore);
+  }
+
+  /** A buyer at the mock marketplace, which this starts. */
+  private FlyoverBuyer buyer() throws IOException {
     marketplace.start();
     MarketplaceClient client = new MarketplaceClient(marketplace.url("/").toString(), "test-jwt");
-    FlyoverBuyer buyer = new FlyoverBuyer(client, 100000);
-    return HummingbirdPathSelector.create(
-        Scion.defaultService(), PathPolicy.MIN_HOPS, buyer, 1000, duration, renewBefore);
+    return new FlyoverBuyer(client, 100000);
   }
 
   /**
