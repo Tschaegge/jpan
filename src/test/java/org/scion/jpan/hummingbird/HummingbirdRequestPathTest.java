@@ -15,6 +15,7 @@
 package org.scion.jpan.hummingbird;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.scion.jpan.testutil.TestUtil.fromHex;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -182,14 +183,6 @@ class HummingbirdRequestPathTest {
         8080,
         TINY4_PATH,
         new InetSocketAddress("127.0.0.1", 31000));
-  }
-
-  private static byte[] fromHex(String hex) {
-    byte[] out = new byte[hex.length() / 2];
-    for (int i = 0; i < out.length; i++) {
-      out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
-    }
-    return out;
   }
 
   private static RequestPath scionPath() {

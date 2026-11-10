@@ -15,6 +15,7 @@
 package org.scion.jpan.hummingbird;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.scion.jpan.testutil.TestUtil.fromHex;
 
 import com.google.protobuf.MessageLite;
 import com.google.protobuf.Timestamp;
@@ -101,7 +102,7 @@ class FlyoverBuyerTest {
     assertEquals(276, flyover.getBw());
     assertEquals(START, flyover.getStartTime());
     assertEquals(10, flyover.getDuration());
-    assertArrayEquals(hex("000102030405060708090a0b0c0d0e0f"), flyover.getAk());
+    assertArrayEquals(fromHex("000102030405060708090a0b0c0d0e0f"), flyover.getAk());
 
     assertRequest("SearchAssets", SEARCH_REQUEST);
     assertRequest("BuyAssets", BUY_REQUEST);
@@ -147,7 +148,7 @@ class FlyoverBuyerTest {
   /** The third AS is in slot 2 but in interface entry 3. On tiny4 slot and entry are equal. */
   @Test
   void testBuyPathOneSegment() throws Exception {
-    buyPath(path(hex(ONE_SEGMENT_PATH), IA_112, 1, IA_110, 2, IA_110, 3, IA_111, 4), 3);
+    buyPath(path(fromHex(ONE_SEGMENT_PATH), IA_112, 1, IA_110, 2, IA_110, 3, IA_111, 4), 3);
     assertSearch(IA_112, 0, 1);
     assertSearch(IA_110, 2, 3);
     assertSearch(IA_111, 4, 0);
@@ -276,7 +277,7 @@ class FlyoverBuyerTest {
   private void assertRequest(String method, String body) throws InterruptedException {
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/" + method, request.getPath());
-    assertArrayEquals(hex(body), request.getBody().readByteArray()); // the same as curl
+    assertArrayEquals(fromHex(body), request.getBody().readByteArray()); // the same as curl
   }
 
   private static MockResponse protoResponse(String hex) {
@@ -287,9 +288,5 @@ class FlyoverBuyerTest {
 
   static MockResponse protoResponse(MessageLite message) {
     return protoResponse(ByteString.of(message.toByteArray()).hex());
-  }
-
-  private static byte[] hex(String hex) {
-    return ByteString.decodeHex(hex).toByteArray();
   }
 }

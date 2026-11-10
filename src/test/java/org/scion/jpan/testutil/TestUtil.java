@@ -58,6 +58,22 @@ public class TestUtil {
     return inetAddress.getHostAddress() + ":" + addr.getPort();
   }
 
+  /**
+   * The bytes of a hex string without separators, such as "0a1b" for {0x0a, 0x1b}.
+   *
+   * @throws IllegalArgumentException if the string has an odd number of digits
+   */
+  public static byte[] fromHex(String hex) {
+    if (hex.length() % 2 != 0) {
+      throw new IllegalArgumentException("Odd number of hex digits: " + hex.length());
+    }
+    byte[] bytes = new byte[hex.length() / 2];
+    for (int i = 0; i < bytes.length; i++) {
+      bytes[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+    }
+    return bytes;
+  }
+
   public static String toStringHex(byte[] ba) {
     StringBuilder sb = new StringBuilder();
     sb.append("[");

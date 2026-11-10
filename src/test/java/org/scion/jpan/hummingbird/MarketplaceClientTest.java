@@ -15,6 +15,7 @@
 package org.scion.jpan.hummingbird;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.scion.jpan.testutil.TestUtil.fromHex;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -101,7 +102,8 @@ class MarketplaceClientTest {
 
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/SearchAssets", request.getPath());
-    assertArrayEquals(hex(SEARCH_REQUEST), request.getBody().readByteArray()); // the same as curl
+    assertArrayEquals(
+        fromHex(SEARCH_REQUEST), request.getBody().readByteArray()); // the same as curl
   }
 
   /**
@@ -115,7 +117,8 @@ class MarketplaceClientTest {
   void testBuyAssets() throws Exception {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse("0a0a0a08000000000000000f10fd4e"));
-    Marketplace.BuyAssetsRequest order = Marketplace.BuyAssetsRequest.parseFrom(hex(BUY_REQUEST));
+    Marketplace.BuyAssetsRequest order =
+        Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
 
     Marketplace.BuyAssetsResponse bought =
         client(MARKETPLACE_CERT).buyAssets(order.getAssetsList(), order.getMaxPrice());
@@ -124,7 +127,7 @@ class MarketplaceClientTest {
 
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/BuyAssets", request.getPath());
-    assertArrayEquals(hex(BUY_REQUEST), request.getBody().readByteArray()); // the same as curl
+    assertArrayEquals(fromHex(BUY_REQUEST), request.getBody().readByteArray()); // the same as curl
   }
 
   /** The marketplace answers an order it does not fill with 200 and no assets, as seen on tiny4. */
@@ -132,7 +135,8 @@ class MarketplaceClientTest {
   void testBuyAssetsNotBought() throws Exception {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse(""));
-    Marketplace.BuyAssetsRequest order = Marketplace.BuyAssetsRequest.parseFrom(hex(BUY_REQUEST));
+    Marketplace.BuyAssetsRequest order =
+        Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
     MarketplaceClient client = client(MARKETPLACE_CERT);
     assertThrows(
         IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
@@ -145,10 +149,10 @@ class MarketplaceClientTest {
   @Test
   void testOrder() {
     com.google.protobuf.ByteString asset17 =
-        com.google.protobuf.ByteString.copyFrom(hex("0000000000000011"));
+        com.google.protobuf.ByteString.copyFrom(fromHex("0000000000000011"));
     Marketplace.BuyAsset order = MarketplaceClient.order(asset17, 1000, 1793710861L, 10);
     assertArrayEquals(
-        hex("0a0800000000000000111206088db6a7d7061a060897b6a7d70620e807"), order.toByteArray());
+        fromHex("0a0800000000000000111206088db6a7d7061a060897b6a7d70620e807"), order.toByteArray());
   }
 
   /**
@@ -159,27 +163,25 @@ class MarketplaceClientTest {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse("0a10000102030405060708090a0b0c0d0e0f18ec07209402"));
     com.google.protobuf.ByteString asset15 =
-        com.google.protobuf.ByteString.copyFrom(hex("000000000000000f"));
+        com.google.protobuf.ByteString.copyFrom(fromHex("000000000000000f"));
 
     Marketplace.RedeemAssetResponse reservation = client(MARKETPLACE_CERT).redeemAsset(asset15);
     assertArrayEquals(
-        hex("000102030405060708090a0b0c0d0e0f"), reservation.getAuthenticationKey().toByteArray());
+        fromHex("000102030405060708090a0b0c0d0e0f"),
+        reservation.getAuthenticationKey().toByteArray());
     assertEquals(0, reservation.getReservationId()); // not on the wire: 0 is the default
     assertEquals(276, reservation.getBwDataplaneEncoding()); // the codepoint of 1004 kbit/s
 
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/RedeemAsset", request.getPath());
-    assertArrayEquals(hex("1a08000000000000000f"), request.getBody().readByteArray()); // as curl
+    assertArrayEquals(
+        fromHex("1a08000000000000000f"), request.getBody().readByteArray()); // as curl
   }
 
   private static MockResponse protoResponse(String hex) {
     return new MockResponse()
         .addHeader("Content-Type", "application/proto")
         .setBody(new Buffer().write(ByteString.decodeHex(hex)));
-  }
-
-  private static byte[] hex(String hex) {
-    return ByteString.decodeHex(hex).toByteArray();
   }
 
   /** The answer of the tiny4 marketplace to a call without a token, as captured with curl. */
