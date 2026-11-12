@@ -273,16 +273,30 @@ public class HummingbirdPathRaw {
     return highResTsRaw & 0x3FFFFF;
   }
 
-  /** Ingress of hop {@code hopIdx} in travel direction. At a crossover it is the previous hop's. */
+  /**
+   * Ingress of hop {@code hopIdx} in travel direction. 0 at the source, because there the packet
+   * comes from inside the AS, even if the hop field names an interface. At a crossover it is the
+   * previous hop's.
+   */
   public int getFlyoverIngress(int hopIdx) {
+    if (hopIdx == 0) {
+      return 0;
+    }
     if (getCrossOver(hopIdx) == 1) {
       return travelIngress(hopIdx - 1);
     }
     return travelIngress(hopIdx);
   }
 
-  /** Egress of hop {@code hopIdx} in travel direction. At a crossover it is the next hop's. */
+  /**
+   * Egress of hop {@code hopIdx} in travel direction. 0 at the destination, because there the
+   * packet goes to a host inside the AS, even if the hop field names an interface. At a crossover
+   * it is the next hop's.
+   */
   public int getFlyoverEgress(int hopIdx) {
+    if (hopIdx == getHopFieldCount() - 1) {
+      return 0;
+    }
     if (getCrossOver(hopIdx) == -1) {
       return travelEgress(hopIdx + 1);
     }
