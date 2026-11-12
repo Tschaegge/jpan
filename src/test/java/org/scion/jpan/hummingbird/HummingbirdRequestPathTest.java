@@ -144,6 +144,39 @@ class HummingbirdRequestPathTest {
     assertDoesNotThrow(() -> new HummingbirdRequestPath(tiny4Path(), flyovers));
   }
 
+  /**
+   * A path that starts and ends inside a segment: source B and destination C in the middle of a
+   * down segment A -> B -> C -> D. Their hop fields keep the interfaces towards A and D (5 and 7),
+   * but the flyover of the source is for ingress 0 and the one of the destination for egress 0.
+   */
+  @Test
+  void testFirstAndLastHopUseZero() {
+    byte[] raw =
+        fromHex(
+            "00002000" // two hop fields in one segment
+                + "010012346a7f08b9" // construction direction
+                + "003f00050002aaaaaaaaaaaa" // B: ConsIngress 5, ConsEgress 2
+                + "003f00030007bbbbbbbbbbbb"); // C: ConsIngress 3, ConsEgress 7
+    RequestPath path =
+        PackageVisibilityHelper.createDummyPath(
+            ScionUtil.parseIA("1-ff00:0:112"),
+            DST_ISD_AS,
+            new byte[] {127, 0, 0, 1},
+            8080,
+            raw,
+            new InetSocketAddress("127.0.0.1", 31000));
+    Flyover[] flyovers = {
+      new Flyover(0, 2, 1, 100, 0, 60, AK), new Flyover(3, 0, 1, 100, 0, 60, AK)
+    };
+    assertDoesNotThrow(() -> new HummingbirdRequestPath(path, flyovers));
+
+    flyovers[0] = new Flyover(5, 2, 1, 100, 0, 60, AK);
+    Exception e =
+        assertThrows(
+            IllegalArgumentException.class, () -> new HummingbirdRequestPath(path, flyovers));
+    assertEquals("Flyover 0 is for 5>2, the path has 0>2", e.getMessage());
+  }
+
   /** The path bytes the HummingbirdRequestPath writes for one packet of the given length. */
   private static byte[] write(HummingbirdRequestPath path, int packetLength) {
     ByteBuffer buffer = ByteBuffer.allocate(path.getRawPath().length);

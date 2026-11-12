@@ -25,6 +25,7 @@ import javax.net.ssl.SSLException;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
 import okio.Buffer;
@@ -143,6 +144,27 @@ class MarketplaceClientTest {
   }
 
   /**
+   * A purchase reaches the marketplace at most once. The connection drops after the marketplace
+   * read the order, so it may have bought: the client must report that, not send the order again.
+   * The search first puts the connection in the pool, as in FlyoverBuyer.buyPath.
+   */
+  @Test
+  void testBuyAssetsNotSentTwice() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse("")); // the search
+    server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+    server.enqueue(protoResponse("0a0a0a08000000000000000f10fd4e")); // a second purchase
+    Marketplace.BuyAssetsRequest order =
+        Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
+    MarketplaceClient client = client(MARKETPLACE_CERT);
+    client.searchAssets(ScionUtil.parseIA("1-ff00:0:112"), 0, 1, 1000, 1793705366L, 10);
+
+    assertThrows(
+        IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    assertEquals(2, server.getRequestCount(), "the search and one purchase");
+  }
+
+  /**
    * The order that curl sent on tiny4 for 10 s of 1000 kbit/s from asset 17, from 2026-11-03
    * 13:01:01 UTC: the inside of BUY_REQUEST in FlyoverBuyerTest.
    */
@@ -232,6 +254,17 @@ class MarketplaceClientTest {
   void testRejectsOtherCertificate() {
     start(certificate());
     assertThrows(SSLException.class, () -> client(MARKETPLACE_CERT).info());
+  }
+
+  /** A base URL that OkHttp cannot call fails in the constructor, not on the first call. */
+  @Test
+  void testRejectsUrlWithoutHttp() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new MarketplaceClient("marketplace.local:31888", "test-jwt"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new MarketplaceClient("ftp://marketplace.local:31888", "test-jwt"));
   }
 
   private void start(HeldCertificate serverCert) {
