@@ -173,7 +173,7 @@ class FlyoverBuyerTest {
   }
 
   /** A request path with the interfaces the control service reports, as (ISD-AS, ID) pairs. */
-  static Path path(byte[] raw, long... isdAsAndId) {
+  private static Path path(byte[] raw, long... isdAsAndId) {
     PathMetadata.Builder metadata = PathMetadata.newBuilder().setRaw(raw.clone());
     for (int i = 0; i < isdAsAndId.length; i += 2) {
       metadata.addInterfaces(PathMetadata.PathInterface.create(isdAsAndId[i], isdAsAndId[i + 1]));
