@@ -62,6 +62,7 @@ public final class MarketplaceClient {
    *
    * @param baseUrl for example https://marketplace.example.org:31888
    * @param jwt the token of the marketplace account, sent with every call
+   * @throws IllegalArgumentException if {@code baseUrl} isn't an http(s) URL
    */
   public MarketplaceClient(String baseUrl, String jwt) {
     this(baseUrl, jwt, new OkHttpClient());
@@ -75,6 +76,8 @@ public final class MarketplaceClient {
    * @param jwt the token of the marketplace account, sent with every call
    * @param certificate the only certificate this client trusts
    * @param address where the host of baseUrl is, for example 127.0.0.1
+   * @throws IllegalArgumentException if {@code baseUrl} isn't an http(s) URL, or if the client
+   *     cannot be set up to trust {@code certificate}
    */
   public MarketplaceClient(
       String baseUrl, String jwt, X509Certificate certificate, InetAddress address) {
@@ -82,9 +85,11 @@ public final class MarketplaceClient {
   }
 
   private MarketplaceClient(String baseUrl, String jwt, OkHttpClient httpClient) {
+    HttpUrl.get(baseUrl); // throws unless baseUrl is an http or https URL
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     this.jwt = jwt;
-    this.httpClient = httpClient;
+    // Never resend on our own: a call that reached the marketplace may already have bought.
+    this.httpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build();
   }
 
   /** The attributes of the marketplace, for example its currency. */
