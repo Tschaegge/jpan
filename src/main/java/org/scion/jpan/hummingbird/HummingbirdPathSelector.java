@@ -17,6 +17,8 @@ package org.scion.jpan.hummingbird;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.scion.jpan.Path;
 import org.scion.jpan.PathMetadata;
 import org.scion.jpan.PathPolicy;
@@ -47,8 +49,8 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   /** Seconds a reservation starts before it is bought, see {@link #open}. */
   private static final int BACKDATE = 10;
 
-  /** How often the timer checks whether the reservations must be renewed. */
-  private static final int CHECK_INTERVAL_MS = 1000;
+  /** Failed attempts of one purchase before the timer pauses it, see {@link #attempt}. */
+  private static final int MAX_ATTEMPTS = 5;
 
   private final FlyoverBuyer buyer;
   private final int bandwidth;
@@ -63,6 +65,14 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   private volatile long expiry;
   private boolean expiryLogged; // only buy() and renew(), which never run at the same time
   private volatile boolean sentSinceBought;
+  // The purchase the timer is trying to make, only used under the lock of renew() and close().
+  private long roundStart; // the start of every attempt, so that all ask for one window; 0: none
+  private int attempts; // failed attempts of this purchase
+  private long nextAttemptAt; // Unix seconds, no attempt before
+  // The next run of renew(). It has a lock of its own, so that getPath() never waits for a
+  // purchase.
+  private final Object alarmLock = new Object();
+  private Future<?> alarm;
 
   /**
    * @param service finds the SCION paths
@@ -118,29 +128,54 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   public void open(ScionSocketAddress remote) {
     super.open(remote);
     try {
-      buy();
+      buy(System.currentTimeMillis() / 1000 - BACKDATE);
     } catch (IOException e) {
       close();
       throw new UncheckedIOException(e);
     }
-    addScheduledTask(this::renew, CHECK_INTERVAL_MS, CHECK_INTERVAL_MS);
     sentSinceBought = false;
+    // Nothing to do until the reservations run low.
+    setAlarm(expiry - renewBefore - System.currentTimeMillis() / 1000);
   }
 
   /**
-   * Runs every {@link #CHECK_INTERVAL_MS} on the selector's timer. If the selector's SCION path
-   * changed, it either keeps the flyovers (same route, new bytes) or buys new ones (new route).
-   * Once the reservations expire in less than renewBefore seconds, it buys new ones. It only buys
-   * if the application sent since the last purchase, which {@link #getPath()} notes for every
-   * packet: an idle selector lets its reservations expire and buys again within a second of the
-   * next packet. A failed purchase keeps the old path, and the next run tries again; after expiry
-   * the routers demote every packet.
+   * Lets {@link #renew} run once on the selector's timer, in the given number of seconds. The
+   * selector has only this one alarm: an alarm that was set before is dropped.
+   */
+  private void setAlarm(long seconds) {
+    synchronized (alarmLock) {
+      if (alarm != null) {
+        alarm.cancel(false);
+      }
+      // toMillis() stops at Long.MAX_VALUE instead of overflowing: without flyovers, expiry is
+      // Long.MAX_VALUE.
+      alarm = addOneTimeTask(this::renew, TimeUnit.SECONDS.toMillis(seconds));
+    }
+  }
+
+  /** The superclass selected its path, which may be another one: {@link #renew} looks at it now. */
+  @Override
+  protected void onPathUpdate() {
+    if (flyovers != null) { // not during open(), which makes the first purchase itself
+      setAlarm(0);
+    }
+  }
+
+  /**
+   * Runs on the selector's timer when there may be something to do, and then sets the alarm for its
+   * next run itself. If the selector's SCION path changed, it either keeps the flyovers (same
+   * route, new bytes) or buys new ones (new route). Once the reservations expire in less than
+   * renewBefore seconds, it buys new ones. It only buys if the application sent since the last
+   * purchase, which {@link #getPath()} notes: an idle selector lets its reservations expire and
+   * buys again with the next packet. A failed purchase keeps the old path, and {@link #attempt}
+   * decides when to try again; after expiry the routers demote every packet.
    */
   private synchronized void renew() {
     if (!isOpen()) {
       return; // closed while this run waited for the lock
     }
     long now = System.currentTimeMillis() / 1000;
+    boolean due = now >= expiry - renewBefore;
     try {
       Path current = super.getPath(); // refreshed by the superclass timer
       if (current != null && scionPath != null && !current.equals(scionPath)) {
@@ -148,38 +183,79 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
           // Ak covers the interfaces and the window, not the SCION hop fields: no purchase.
           path = new HummingbirdRequestPath(current, flyovers);
           scionPath = current;
-        } else if (sentSinceBought) {
-          buy();
-          sentSinceBought = false;
+        } else {
+          due = true; // another route needs flyovers of its own
         }
       }
-      if (now >= expiry - renewBefore && sentSinceBought) {
-        buy();
-        sentSinceBought = false;
+      if (due && sentSinceBought && now >= nextAttemptAt) {
+        if (attempt(now)) {
+          due = false;
+        }
       }
     } catch (Exception e) {
-      // Not only IOException: any exception that leaves this method stops the timer task for good.
-      LOG.warn(
-          "Renewing the Hummingbird reservations failed, trying again in 1 s: {}", e.toString());
+      // Not only IOException: any exception that leaves this method skips the alarm below, and
+      // renew() never runs again.
+      LOG.warn("Renewing the Hummingbird reservations failed: {}", e.toString());
     }
     if (path != null && now >= expiry && !expiryLogged) {
       LOG.warn("Hummingbird reservations expired, the routers demote every packet until renewed");
       expiryLogged = true;
+    }
+    // When to run again.
+    if (!due) {
+      setAlarm(expiry - renewBefore - now); // nothing to do until the reservations run low
+    } else if (sentSinceBought) {
+      // The purchase failed or pauses. At least a second, so that it can never run in a loop.
+      setAlarm(Math.max(1, nextAttemptAt - now));
+    }
+    // Otherwise a purchase is due, but the application has not sent since the last one: no alarm
+    // until getPath() sets it with the next packet.
+  }
+
+  /**
+   * One attempt of the purchase the timer is trying to make. Every attempt of it asks for the same
+   * window, from the start of its first attempt.
+   *
+   * @return false if the purchase failed
+   */
+  private boolean attempt(long now) {
+    if (roundStart == 0) {
+      roundStart = now - BACKDATE;
+    }
+    try {
+      buy(roundStart);
+      sentSinceBought = false;
+      roundStart = 0;
+      attempts = 0;
+      nextAttemptAt = 0;
+      return true;
+    } catch (Exception e) {
+      attempts++;
+      if (attempts >= MAX_ATTEMPTS) {
+        nextAttemptAt = now + duration;
+        roundStart = 0;
+        attempts = 0;
+        LOG.error("Maximum Number of tries exceeded");
+      } else {
+        nextAttemptAt = now + (1L << (attempts - 1));
+      }
+      return false;
     }
   }
 
   /**
    * Buys flyovers for the current best SCION path and switches to them. Does nothing while there is
    * no path to the destination; the channel then reports it on write().
+   *
+   * @param start of the reservations in Unix seconds, in the past: the packet carries the offset
+   *     from start to its BaseTimestamp unsigned, so a future start wraps it, and the routers
+   *     derive a different Ak and drop every packet
    */
-  private void buy() throws IOException {
+  private void buy(long start) throws IOException {
     Path current = super.getPath(); // not getPath(): that is the Hummingbird path
     if (current == null) {
       return;
     }
-    // In the past: the packet carries BaseTimestamp - start as an unsigned offset, so a future
-    // start wraps it and the routers derive a different Ak and drop every packet.
-    long start = System.currentTimeMillis() / 1000 - BACKDATE;
     Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration);
     path = new HummingbirdRequestPath(current, bought);
     scionPath = current;
@@ -221,6 +297,9 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     path = null;
     scionPath = null;
     flyovers = null;
+    roundStart = 0;
+    attempts = 0;
+    nextAttemptAt = 0;
   }
 
   /**
@@ -229,7 +308,11 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
    */
   @Override
   public Path getPath() {
-    sentSinceBought = true;
+    if (!sentSinceBought) {
+      // The first packet since the last purchase: renew() may be waiting for it to buy again.
+      sentSinceBought = true;
+      setAlarm(0);
+    }
     return path;
   }
 

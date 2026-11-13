@@ -20,8 +20,10 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.scion.jpan.Path;
@@ -85,10 +87,10 @@ class HummingbirdPathSelectorTest {
 
   /**
    * 18 s reservations start 10 s back and are renewed 4 s ahead, so the renewal is due 4 s after
-   * the start of the second in which they were bought. Bought at 12.85 s, the start is 2 s, due at
-   * 14 s, and the timer, checking once a second, renews 1.2 to 2.2 s later than that: so 3 to 5 s
-   * after the purchase. Not after 1 s (an expiry never updated) and not only at expiry (7 s and
-   * later).
+   * the start of the second in which they were bought. Bought at 12.85 s, the start is 2 s and the
+   * renewal is due at 16 s. The alarm is set in whole seconds, so it rings up to a second after
+   * that: 3 to 5 s after the purchase. Not after 1 s (an expiry never updated) and not only at
+   * expiry (7 s and later).
    */
   @Test
   void testRenews() throws Exception {
@@ -144,11 +146,53 @@ class HummingbirdPathSelectorTest {
   }
 
   /**
+   * A renewal that keeps failing is tried five times, all for the same window, with pauses of 1, 2,
+   * 4 and 8 s in between, and then given up for one reservation duration. 16 s reservations renewed
+   * 4 s ahead are due 2 s after open(); every attempt fails at its first search.
+   */
+  @Test
+  void testRetryPauses() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      HummingbirdPathSelector selector = selector(16, 4);
+      int requests = enqueuePurchase();
+      for (int i = 0; i < 6; i++) { // five failures, and one for an attempt that must not come
+        marketplace.enqueue(new MockResponse().setResponseCode(503).setBody("{\"code\":\"down\"}"));
+      }
+      selector.open(REMOTE);
+      try {
+        selector.getPath(); // the application sends, so the selector renews
+        for (int i = 0; i < requests; i++) {
+          marketplace.takeRequest(); // the purchase of open()
+        }
+        long[] at = new long[5];
+        long[] start = new long[5];
+        for (int i = 0; i < 5; i++) {
+          RecordedRequest search = marketplace.takeRequest(10, TimeUnit.SECONDS);
+          assertNotNull(search, "attempt " + (i + 1));
+          at[i] = System.nanoTime();
+          Marketplace.SearchAssetsRequest asked =
+              Marketplace.SearchAssetsRequest.parseFrom(search.getBody().readByteArray());
+          start[i] = asked.getStartsAtLatest().getSeconds();
+        }
+        long[] pauses = {1, 2, 4, 8};
+        for (int i = 0; i < 4; i++) {
+          double seconds = (at[i + 1] - at[i]) / 1e9;
+          assertEquals(pauses[i], seconds, 0.5, "pause after attempt " + (i + 1));
+          assertEquals(start[0], start[i + 1], "attempt " + (i + 2) + " asks for another window");
+        }
+        assertNull(marketplace.takeRequest(3, TimeUnit.SECONDS), "an attempt after the fifth");
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
    * The selector renews only while the application sends, which it notices by getPath() calls; the
    * test therefore watches the purchases through the marketplace, not through getPath(). 16 s
    * reservations renewed 4 s ahead are due 2 to 3 s after a purchase. Three phases: one packet, so
    * the first renewal happens; nothing sent for 3.5 s, so no renewal although one is due; one
-   * packet again, so the next purchase follows within a second or two.
+   * packet again, which sets the alarm, so the next purchase follows at once.
    */
   @Test
   void testRenewsOnlyWhileSending() throws Exception {
