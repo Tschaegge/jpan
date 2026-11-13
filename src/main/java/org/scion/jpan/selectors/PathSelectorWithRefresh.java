@@ -221,6 +221,7 @@ public class PathSelectorWithRefresh implements PathSelector {
     if (availablePaths.isEmpty()) {
       LOG.warn("No free path available.");
       usedPath.set(null);
+      onPathUpdate();
       return;
     }
 
@@ -259,6 +260,16 @@ public class PathSelectorWithRefresh implements PathSelector {
 
   private void findFreePath() {
     usedPath.set(availablePaths.get(0));
+    onPathUpdate();
+  }
+
+  /**
+   * Called every time the selector has selected its path: after a refresh, after a reported error
+   * and after a ranking. The path may be the same as before, or null. The selector is locked during
+   * the call, so an implementation must return quickly. The default implementation does nothing.
+   */
+  protected void onPathUpdate() {
+    // For subclasses.
   }
 
   @Override
@@ -417,6 +428,24 @@ public class PathSelectorWithRefresh implements PathSelector {
   protected synchronized void addScheduledTask(Runnable timerTask, int delayMs, int periodMs) {
     timerFutures.add(
         timer.scheduleAtFixedRate(timerTask, delayMs, periodMs, TimeUnit.MILLISECONDS));
+  }
+
+  /**
+   * Schedule a task to be executed once by this selector. The task is cancelled if {@link #close()}
+   * is called before it runs. Unlike {@link #addScheduledTask}, this method does not lock the
+   * selector, so it never waits for a refresh. A task that is added while close() runs may
+   * therefore still run once.
+   *
+   * @param timerTask the task
+   * @param delayMs delay before the execution (milliseconds)
+   * @return the scheduled task, to cancel it earlier
+   */
+  protected Future<?> addOneTimeTask(Runnable timerTask, long delayMs) {
+    // Forget the tasks that have run or were cancelled, otherwise the list grows with every task.
+    timerFutures.removeIf(Future::isDone);
+    Future<?> future = timer.schedule(timerTask, delayMs, TimeUnit.MILLISECONDS);
+    timerFutures.add(future);
+    return future;
   }
 
   @Override

@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.*;
@@ -385,5 +386,37 @@ class PathSelectorWithRefreshTest {
     } finally {
       pp.close();
     }
+  }
+
+  /** onPathUpdate() is called for every selected path, and a one time task runs once. */
+  @Test
+  void pathUpdateAndOneTimeTask() {
+    ScionService service = Scion.defaultService();
+    AtomicInteger updates = new AtomicInteger(0);
+    pp =
+        new PathSelectorWithRefresh(service, PathPolicy.DEFAULT) {
+          @Override
+          protected void onPathUpdate() {
+            updates.incrementAndGet();
+          }
+        };
+    InetSocketAddress dummyAddr = new InetSocketAddress(InetAddress.getLoopbackAddress(), 12345);
+    ScionSocketAddress remote =
+        PackageVisibilityHelper.toSSA(MockNetwork.TINY_SRV_ISD_AS, dummyAddr);
+
+    pp.open(remote);
+    assertEquals(1, updates.get());
+    pp.refresh();
+    assertEquals(2, updates.get());
+
+    AtomicInteger runs = new AtomicInteger(0);
+    pp.addOneTimeTask(runs::incrementAndGet, 50);
+    Future<?> late = pp.addOneTimeTask(runs::incrementAndGet, 60_000);
+    TestUtil.sleep(300);
+    assertEquals(1, runs.get());
+
+    // close() cancels the task that has not run yet
+    pp.close();
+    assertTrue(late.isCancelled());
   }
 }
