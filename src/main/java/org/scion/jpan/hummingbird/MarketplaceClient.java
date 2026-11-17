@@ -92,12 +92,6 @@ public final class MarketplaceClient {
     this.httpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build();
   }
 
-  /** The attributes of the marketplace, for example its currency. */
-  Marketplace.MarketplaceInfoResponse info() throws IOException {
-    byte[] request = Marketplace.MarketplaceInfoRequest.getDefaultInstance().toByteArray();
-    return Marketplace.MarketplaceInfoResponse.parseFrom(post("Info", request));
-  }
-
   /**
    * The assets for sale at one interface pair of an AS that have the bandwidth for the whole time
    * window, from all pages of the results.
@@ -161,7 +155,8 @@ public final class MarketplaceClient {
    * the total exceeds maxPrice. Every bought part becomes an asset of its own with a new ID.
    *
    * @param assets what to buy, each part made with {@link #order}
-   * @param maxPrice the most the whole purchase may cost, in the unit of {@link #info()}
+   * @param maxPrice the most the whole purchase may cost, in the smallest unit of the marketplace's
+   *     currency (CHF cents on tiny4)
    * @return the IDs of the bought assets, in the order of the request, and the cost
    * @throws IOException also if the marketplace returns fewer assets than requested
    */
