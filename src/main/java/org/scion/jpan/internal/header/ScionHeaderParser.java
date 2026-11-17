@@ -14,12 +14,15 @@
 
 package org.scion.jpan.internal.header;
 
-import java.net.*;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import org.scion.jpan.Constants;
 import org.scion.jpan.ResponsePath;
 import org.scion.jpan.ScionRuntimeException;
 import org.scion.jpan.Scmp;
+import org.scion.jpan.hummingbird.HummingbirdResponsePath;
 import org.scion.jpan.internal.util.ByteUtil;
 
 /** Utility methods for reading and writing the Common Header and Address Header. */
@@ -34,12 +37,8 @@ public class ScionHeaderParser {
    * @param userBuffer Buffer in which to write the user payload.
    */
   public static void extractUserPayload(ByteBuffer data, ByteBuffer userBuffer) {
-    int i1 = data.getInt(4);
-    int hdrLen = ByteUtil.readInt(i1, 8, 8);
-    int hdrLenBytes = hdrLen * 4;
-
     int udpHeaderLength = 8;
-    int payLoadStart = hdrLenBytes + udpHeaderLength;
+    int payLoadStart = extractL4Offset(data, 0) + udpHeaderLength;
     int pos = data.position();
     data.position(payLoadStart);
     int maxUserLen = userBuffer.remaining();
@@ -77,8 +76,6 @@ public class ScionHeaderParser {
 
     int i1 = data.getInt(4);
     int i2 = data.getInt(8);
-    int nextHeader = ByteUtil.readInt(i1, 0, 8);
-    HeaderConstants.HdrTypes hdrType = HeaderConstants.HdrTypes.parse(nextHeader);
     int hdrLen = ByteUtil.readInt(i1, 8, 8);
     int hdrLenBytes = hdrLen * 4;
     int dl = ByteUtil.readInt(i2, 10, 2);
@@ -115,21 +112,32 @@ public class ScionHeaderParser {
     }
 
     // raw path
+    int pathType = ByteUtil.readInt(i2, 0, 8);
     byte[] path = new byte[hdrLenBytes - data.position()];
     if (path.length > 0) {
       // raw path may be empty for local AS
       data.get(path);
-      reversePathInPlace(ByteBuffer.wrap(path));
+      if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
+        path = HummingbirdPathConverter.reverse(path);
+      } else {
+        reversePathInPlace(ByteBuffer.wrap(path));
+      }
     }
 
-    // get remote port from UDP or SCMP payload
-    data.position(hdrLenBytes);
-    int srcPort = extractSrcPort(data, hdrLenBytes, hdrType);
-    int dstPort = extractDstPort(data, hdrLenBytes, hdrType);
+    // get remote port from UDP or SCMP payload, which may follow an extension header
+    int l4Offset = extractL4Offset(data, 0);
+    HeaderConstants.HdrTypes l4Type = extractL4Type(data, 0);
+    data.position(l4Offset);
+    int srcPort = extractSrcPort(data, l4Offset, l4Type);
+    int dstPort = extractDstPort(data, l4Offset, l4Type);
 
     // rewind to original offset
     data.position(start);
     // Swap src and dst.
+    if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
+      return new HummingbirdResponsePath(
+          path, dstIsdAs, dstIP, dstPort, srcIsdAs, srcIP, srcPort, firstHopAddress);
+    }
     return ResponsePath.create(
         path, dstIsdAs, dstIP, dstPort, srcIsdAs, srcIP, srcPort, firstHopAddress);
   }
@@ -154,12 +162,10 @@ public class ScionHeaderParser {
   public static InetSocketAddress extractDestinationSocketAddress(ByteBuffer data) {
     int start = data.position();
 
-    HeaderConstants.HdrTypes hdrType = extractNextHeader(data);
+    // The UDP or SCMP header may follow an extension header
+    HeaderConstants.HdrTypes hdrType = extractL4Type(data, start);
 
-    int i1 = data.getInt(start + 4); // nextHeader, hdrLen, payLoadLen
     int i2 = data.getInt(start + 8); // pathType, dt, dl, st, sl
-    int hdrLen = ByteUtil.readInt(i1, 8, 8);
-    int hdrLenBytes = hdrLen * 4;
     int dl = ByteUtil.readInt(i2, 10, 2);
 
     // Address header
@@ -173,7 +179,7 @@ public class ScionHeaderParser {
     data.position(start + 28);
     byte[] bytesDst = new byte[(dl + 1) * 4];
     data.get(bytesDst);
-    int dstPort = extractDstPort(data, start + hdrLenBytes, hdrType);
+    int dstPort = extractDstPort(data, extractL4Offset(data, start), hdrType);
     if (dstPort < 0) {
       // return null, e.g. for truncated SCMP packets
       return null;
@@ -188,6 +194,42 @@ public class ScionHeaderParser {
       // This should never happen, we create the byte[] ourselves
       throw new ScionRuntimeException(e);
     }
+  }
+
+  /**
+   * Whether the SCION header is followed by an extension header. A packet cannot contain both an
+   * end-to-end and a hop-by-hop as this fails {@link #validate}.
+   */
+  private static boolean isExtension(int nextHeader) {
+    return nextHeader == HeaderConstants.HdrTypes.HOP_BY_HOP.code()
+        || nextHeader == HeaderConstants.HdrTypes.END_TO_END.code();
+  }
+
+  /**
+   * Where the UDP or SCMP header begins in a packet that begins at {@code start}: right after the
+   * SCION header, or after the extension header that follows it. Expects a validated packet.
+   */
+  private static int extractL4Offset(ByteBuffer data, int start) {
+    int offset = start + ByteUtil.toUnsigned(data.get(start + 5)) * 4;
+    if (isExtension(ByteUtil.toUnsigned(data.get(start + 4)))) {
+      // The second byte of an extension header is its length in 4-byte lines minus one.
+      offset += (ByteUtil.toUnsigned(data.get(offset + 1)) + 1) * 4;
+    }
+    return offset;
+  }
+
+  /**
+   * The type of the UDP or SCMP header in a packet that begins at {@code start}, as the SCION
+   * header or the extension header that follows it names it. Expects a validated packet.
+   */
+  private static HeaderConstants.HdrTypes extractL4Type(ByteBuffer data, int start) {
+    int nextHeader = ByteUtil.toUnsigned(data.get(start + 4));
+    if (isExtension(nextHeader)) {
+      // The first byte of an extension header is the next header.
+      int hdrLenBytes = ByteUtil.toUnsigned(data.get(start + 5)) * 4;
+      nextHeader = ByteUtil.toUnsigned(data.get(start + hdrLenBytes));
+    }
+    return HeaderConstants.HdrTypes.parse(nextHeader);
   }
 
   private static int extractDstPort(
@@ -295,8 +337,10 @@ public class ScionHeaderParser {
   public static int extractPathHeaderPosition(ByteBuffer data) {
     int nextHeader = ByteUtil.toUnsigned(data.get(4));
     if (nextHeader != HeaderConstants.HdrTypes.UDP.code()
-        && nextHeader != HeaderConstants.HdrTypes.SCMP.code()) {
-      throw new UnsupportedOperationException("This method supports only UDP and SCMP headers");
+        && nextHeader != HeaderConstants.HdrTypes.SCMP.code()
+        && !isExtension(nextHeader)) {
+      throw new UnsupportedOperationException(
+          "This method supports only UDP, SCMP and extension headers");
     }
 
     int pathType = ByteUtil.toUnsigned(data.get(8));
@@ -352,9 +396,11 @@ public class ScionHeaderParser {
           + (hdrLenBytes + payLoadLen);
     }
     int pathType = ByteUtil.readInt(i2, 0, 8);
-    if (pathType != 1 && pathType != 0) {
+    if (pathType != 1
+        && pathType != 0
+        && pathType != HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       // Validation against path length happens further down.
-      return PRE + "Invalid path type: expected 0 or 1, got " + pathType;
+      return PRE + "Invalid path type: expected 0, 1 or 5, got " + pathType;
     }
     int dt = ByteUtil.readInt(i2, 8, 2);
     int dl = ByteUtil.readInt(i2, 10, 2);
@@ -414,18 +460,86 @@ public class ScionHeaderParser {
     if (path.length == 0 && pathType != 0) {
       return PRE + "Path is empty but path type is: " + pathType;
     }
-    if (path.length > 0 && pathType != 1) {
+    if (path.length > 0
+        && pathType != 1
+        && pathType != HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
       return PRE + "Path is not empty but path type is: " + pathType;
     }
-    // TODO validate path
+    if (pathType == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
+      String pathError = validateHummingbird(path);
+      if (pathError != null) {
+        return PRE + pathError;
+      }
+    }
+    // TODO validate SCION paths (type 1) as well
 
     data.position(start + hdrLenBytes);
+    if (isExtension(nextHeader)) {
+      // An extension header: its first byte is the next header, the second its length in
+      // 4-byte lines minus one. Skip it and validate what follows.
+      if (data.remaining() < 2) {
+        return PRE + "Extension header too short";
+      }
+      nextHeader = ByteUtil.toUnsigned(data.get());
+      int extLenBytes = (ByteUtil.toUnsigned(data.get()) + 1) * 4;
+      if (data.remaining() < extLenBytes - 2) {
+        return PRE + "Extension header too short";
+      }
+      data.position(data.position() + extLenBytes - 2);
+    }
     if (nextHeader == HeaderConstants.HdrTypes.UDP.code()) {
       return validateUDP(data, start);
     } else if (nextHeader == HeaderConstants.HdrTypes.SCMP.code()) {
       return validateSCMP(data, start);
     }
     return PRE + "Unsupported header type: " + nextHeader;
+  }
+
+  /**
+   * Checks a Hummingbird path before anything parses it. HummingbirdPathRaw and
+   * HummingbirdPathConverter.reverse rely on the path fitting its own meta header and would throw
+   * otherwise.
+   *
+   * @return why the path is invalid, or null if it is valid
+   */
+  private static String validateHummingbird(byte[] path) {
+    if (path.length < HummingbirdPathRaw.META_LEN) {
+      return "Hummingbird path too short";
+    }
+    int meta = ByteBuffer.wrap(path).getInt(0);
+    int segments = 0;
+    int lines = 0;
+    for (int i = 0; i < 3; i++) {
+      int segLen = ByteUtil.readInt(meta, 11 + 7 * i, 7);
+      if (segLen > 0) {
+        if (segments != i) {
+          return "Hummingbird path with an empty segment in between";
+        }
+        segments++;
+      }
+      lines += segLen;
+    }
+    int hopsStart = HummingbirdPathRaw.META_LEN + segments * HummingbirdPathRaw.INFO_FIELD_LEN;
+    if (path.length != hopsStart + lines * HummingbirdPathRaw.LINE_LEN) {
+      return "Hummingbird path length does not match its meta header";
+    }
+    // Walk the hop fields, 3 lines each or 5 with a flyover. CurrHF must point at the start of one.
+    int currHf = ByteUtil.readInt(meta, 2, 8);
+    boolean currHfFound = false;
+    int line = 0;
+    for (int hops = 0; line < lines; hops++) {
+      if (hops == HummingbirdPathRaw.MAX_HOP_FIELDS) {
+        return "Hummingbird path with too many hop fields";
+      }
+      currHfFound = currHfFound | (line == currHf);
+      boolean flyover = (path[hopsStart + line * HummingbirdPathRaw.LINE_LEN] & 0x80) != 0;
+      line += flyover ? HummingbirdPathRaw.FLYOVER_LINES : HummingbirdPathRaw.HOP_LINES;
+    }
+    // CurrINF also catches a path without hop fields: it has no segment to point at.
+    if (line != lines || !currHfFound || ByteUtil.readInt(meta, 0, 2) >= segments) {
+      return "Hummingbird hop fields do not match the meta header";
+    }
+    return null;
   }
 
   private static String validateUDP(ByteBuffer data, int start) {

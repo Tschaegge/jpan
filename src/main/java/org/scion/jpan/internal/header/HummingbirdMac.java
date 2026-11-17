@@ -31,7 +31,9 @@ import javax.crypto.spec.SecretKeySpec;
  * paper calls the function PRF. Its section 7.1 names it AES-128.
  *
  * <p>One instance per flyover. It keeps the cipher over the flyover's Ak and two arrays that it
- * reuses for every packet, so computing a MAC allocates nothing. Not thread safe.
+ * reuses for every packet, so computing a MAC allocates nothing. The packet cannot serve as these
+ * arrays: the input is assembled from four values, and AES writes a 16-byte block where the hop
+ * field has room for 6. This class is not thread safe.
  */
 public final class HummingbirdMac {
 
@@ -42,7 +44,8 @@ public final class HummingbirdMac {
   private final Cipher akCipher;
   private final byte[] in = new byte[BLOCK_LEN]; // the MAC input, refilled for every packet
   private final ByteBuffer inBuf = ByteBuffer.wrap(in); // a view on in, made once
-  private final byte[] vk = new byte[BLOCK_LEN]; // the flyover MAC, overwritten by every call
+  // The flyover MAC, V_K in the paper (Eq. 3). Overwritten by every call.
+  private final byte[] vk = new byte[BLOCK_LEN];
 
   /**
    * @param ak the flyover's 16 byte authentication key

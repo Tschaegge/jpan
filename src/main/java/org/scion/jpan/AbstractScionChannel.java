@@ -28,6 +28,7 @@ import org.scion.jpan.internal.*;
 import org.scion.jpan.internal.bootstrap.LocalAS;
 import org.scion.jpan.internal.header.ExtensionHeader;
 import org.scion.jpan.internal.header.HeaderConstants;
+import org.scion.jpan.internal.header.HummingbirdPathRaw;
 import org.scion.jpan.internal.header.PathRawParserLight;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.header.ScmpParser;
@@ -513,9 +514,8 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       HeaderConstants.HdrTypes hdrType = ScionHeaderParser.extractNextHeader(buffer);
       // From here on we use linear reading using the buffer's position() mechanism
       buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
-      // Check for extension headers.
-      // This should be mostly unnecessary, however we sometimes saw SCMP error headers wrapped
-      // in extensions headers.
+      // Check for extension headers: SCMP errors are sometimes wrapped in one, and a client may
+      // put a reverse reservation (Hummingbird, Appendix C) into one.
       hdrType = receiveExtensionHeader(buffer, hdrType);
 
       InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);
@@ -536,7 +536,16 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
       // If we have a path we need to use it to get the return address.
       // If we don't have a path (local AS) we need to use the underlay IP address.
       if (pathPos > 0) {
-        int interfaceId = PathRawParserLight.extractLastInterfaceID(buffer, pathPos);
+        int interfaceId;
+        if (ByteUtil.toUnsigned(buffer.get(8)) == HeaderConstants.PathTypes.HUMMINGBIRD.code()) {
+          int oldPos = buffer.position();
+          buffer.position(pathPos);
+          HummingbirdPathRaw path = HummingbirdPathRaw.create(buffer);
+          interfaceId = path.getFlyoverIngress(path.getHopFieldCount() - 1);
+          buffer.position(oldPos);
+        } else {
+          interfaceId = PathRawParserLight.extractLastInterfaceID(buffer, pathPos);
+        }
         return service.getBorderRouterAddress(interfaceId);
       }
     }
@@ -549,9 +558,9 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
     if (hdrType == HeaderConstants.HdrTypes.END_TO_END
         || hdrType == HeaderConstants.HdrTypes.HOP_BY_HOP) {
       ExtensionHeader extHdr = ExtensionHeader.consume(buffer);
-      // Currently we are not doing much here except hoping for an SCMP header
+      // The options are skipped; behind them we expect SCMP or UDP
       hdrType = extHdr.nextHdr();
-      if (hdrType != HeaderConstants.HdrTypes.SCMP) {
+      if (hdrType != HeaderConstants.HdrTypes.SCMP && hdrType != HeaderConstants.HdrTypes.UDP) {
         throw new UnsupportedOperationException("Extension header not supported: " + hdrType);
       }
     }
@@ -859,7 +868,7 @@ abstract class AbstractScionChannel<C extends AbstractScionChannel<?>> implement
           hdrTypeId,
           cfgTrafficClass);
 
-      // PacketLength is needed for MAC at ReservedPaths
+      // Paths with flyovers need the packet length for their MACs
       int packetLength = buffer.position() + rawPath.length + payloadLength;
       path.writePath(buffer, packetLength);
     }

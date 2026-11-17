@@ -88,10 +88,8 @@ public class SelectingDatagramChannel extends ScionDatagramChannel {
             HeaderConstants.HdrTypes hdrType = ScionHeaderParser.extractNextHeader(buffer);
             // From here on we use linear reading using the buffer's position() mechanism
             buffer.position(ScionHeaderParser.extractHeaderLength(buffer));
-            // Check for extension headers.
-            // This should be mostly unnecessary, however we sometimes saw SCMP error headers
-            // wrapped
-            // in extensions headers.
+            // Check for extension headers: SCMP errors are sometimes wrapped in one, and a
+            // client may put a reverse reservation (Hummingbird, Appendix C) into one.
             hdrType = receiveExtensionHeader(buffer, hdrType);
 
             InetSocketAddress firstHopAddress = getFirstHopAddress(buffer, srcAddress);

@@ -57,7 +57,7 @@ public class ResponsePath extends Path {
         rawPath, srcIsdAs, srcIP, srcPort, dstIsdAs, dstIP, dstPort, firstHopAddress);
   }
 
-  private ResponsePath(
+  protected ResponsePath(
       byte[] rawPath,
       long srcIsdAs,
       InetAddress srcIP,

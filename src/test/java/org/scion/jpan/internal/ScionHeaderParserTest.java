@@ -26,10 +26,12 @@ import org.scion.jpan.demo.inspector.PathHeaderScion;
 import org.scion.jpan.demo.inspector.ScionHeader;
 import org.scion.jpan.demo.inspector.ScionPacketInspector;
 import org.scion.jpan.demo.inspector.ScmpHeader;
+import org.scion.jpan.internal.header.HummingbirdPathConverter;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.header.ScmpParser;
 import org.scion.jpan.internal.util.ByteUtil;
 import org.scion.jpan.testutil.ExamplePacket;
+import org.scion.jpan.testutil.HummingbirdExamplePacket;
 
 class ScionHeaderParserTest {
 
@@ -217,6 +219,129 @@ class ScionHeaderParserTest {
       ByteBuffer data = createScmpResponse(Scmp.TypeCode.TYPE_200);
       assertNull(ScionHeaderParser.validate(data)); // Works!
     }
+  }
+
+  /**
+   * The reply to a Hummingbird packet gets the received path reversed the Hummingbird way, and
+   * keeps path type 5, also in a copy for another destination.
+   */
+  @Test
+  void testResponsePathHummingbird() {
+    // The Hummingbird header captured on tiny4, plus the UDP payload it announces
+    byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+    ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+    data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+    data.rewind();
+
+    InetSocketAddress firstHop = new InetSocketAddress("127.0.0.1", 31000);
+    ResponsePath reply = ScionHeaderParser.extractResponsePath(data, firstHop);
+    byte[] received = HummingbirdExamplePacket.PATH_RAW_HBIRD_112_111; // bytes 36 to 135 above
+    assertArrayEquals(HummingbirdPathConverter.reverse(received), reply.getRawPath());
+    assertEquals(40000, reply.getRemotePort()); // the sender's port becomes the reply's destination
+    assertEquals(5, reply.getPathType());
+    assertEquals(5, reply.copy(reply.getRemoteAddress(), 40001).getPathType());
+
+    // A SCION packet still gets a SCION reply.
+    ResponsePath scionReply =
+        ScionHeaderParser.extractResponsePath(ByteBuffer.wrap(packetBytes), firstHop);
+    assertEquals(1, scionReply.getPathType());
+  }
+
+  /** A packet with a path may be SCION (1) or Hummingbird (5), and no other path type. */
+  @Test
+  void validatePathType() {
+    {
+      // Hummingbird: the header captured on tiny4, plus the UDP payload it announces
+      byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+      ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+      data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+      data.rewind();
+      assertNull(ScionHeaderParser.validate(data));
+      data.rewind();
+      data.put(8, (byte) 3); // EPIC, which JPAN does not implement
+      assertNotNull(ScionHeaderParser.validate(data));
+    }
+    {
+      // SCION is still accepted, but not with the path type of an empty path.
+      ByteBuffer data = ByteBuffer.wrap(packetBytes.clone());
+      assertNull(ScionHeaderParser.validate(data)); // Works!
+      data.rewind();
+      data.put(8, (byte) 0);
+      assertNotNull(ScionHeaderParser.validate(data));
+    }
+  }
+
+  /**
+   * A Hummingbird path that does not fit its own meta header fails validation. Otherwise the
+   * receive loop would parse it, and extractResponsePath would throw.
+   */
+  @Test
+  void validateHummingbirdPath() {
+    int pathOffset = 36; // where the path of the captured header starts
+    int meta = 0x28400; // its first word: CurrINF 0, CurrHF 0, SegLen 10, 8, 0
+    assertNull(ScionHeaderParser.validate(capturedPacketWithPathMeta(pathOffset, meta)));
+    // SegLen claims 127 lines, the path has 18
+    assertNotNull(ScionHeaderParser.validate(capturedPacketWithPathMeta(pathOffset, 127 << 14)));
+    // Three segments of 2 lines each: no hop field is 2 lines long
+    assertNotNull(
+        ScionHeaderParser.validate(capturedPacketWithPathMeta(pathOffset, 2 << 14 | 2 << 7 | 2)));
+    // CurrHF points past the last hop field
+    assertNotNull(
+        ScionHeaderParser.validate(capturedPacketWithPathMeta(pathOffset, meta | 255 << 22)));
+    // Hop field 3 at byte 80 loses its flyover: 3 lines instead of 5, so 2 lines are left over
+    ByteBuffer data = capturedPacketWithPathMeta(pathOffset, meta);
+    data.put(pathOffset + 80, (byte) (data.get(pathOffset + 80) & 0x7F));
+    assertNotNull(ScionHeaderParser.validate(data));
+  }
+
+  /**
+   * The Hummingbird packet captured on tiny4, plus a UDP header and payload, with pathMetaWord as
+   * its path meta header.
+   *
+   * @param pathOffset where the path starts in the captured header
+   * @param pathMetaWord the first word of the path: CurrINF, CurrHF and the three SegLen
+   */
+  private static ByteBuffer capturedPacketWithPathMeta(int pathOffset, int pathMetaWord) {
+    byte[] header = HummingbirdExamplePacket.PACKET_BYTES_HBIRD_112_111;
+    ByteBuffer data = ByteBuffer.allocate(header.length + 1288);
+    data.put(header).putShort((short) 40000).putShort((short) 32000).putShort((short) 1288);
+    data.putInt(pathOffset, pathMetaWord);
+    data.rewind();
+    return data;
+  }
+
+  /**
+   * Any SCION packet, not only a Hummingbird one, may carry an extension header between its path
+   * and the UDP header. The parser skips it and reads what it reads without one.
+   */
+  @Test
+  void testSkipsExtensionHeader() {
+    int hdrLen = ScionHeaderParser.extractHeaderLength(ByteBuffer.wrap(packetBytes));
+    byte[] ext = {17, 0, 0, 0}; // UDP follows, (0 + 1) * 4 bytes long, two Pad1
+    ByteBuffer data = ByteBuffer.allocate(packetBytes.length + ext.length);
+    data.put(packetBytes, 0, hdrLen).put(ext).put(packetBytes, hdrLen, packetBytes.length - hdrLen);
+    data.put(4, (byte) 201); // next header: end-to-end extension
+    data.putShort(6, (short) (data.getShort(6) + ext.length)); // payload length
+    data.flip();
+    ByteBuffer plain = ByteBuffer.wrap(packetBytes);
+
+    assertNull(ScionHeaderParser.validate(data.asReadOnlyBuffer()));
+    assertEquals(
+        ScionHeaderParser.extractPathHeaderPosition(plain),
+        ScionHeaderParser.extractPathHeaderPosition(data));
+    ByteBuffer expected = ByteBuffer.allocate(packetBytes.length);
+    ByteBuffer actual = ByteBuffer.allocate(packetBytes.length);
+    ScionHeaderParser.extractUserPayload(plain, expected);
+    ScionHeaderParser.extractUserPayload(data, actual);
+    assertArrayEquals(expected.array(), actual.array());
+    InetSocketAddress firstHop = new InetSocketAddress("127.0.0.1", 31000);
+    assertEquals(
+        ScionHeaderParser.extractResponsePath(plain, firstHop).getRemotePort(),
+        ScionHeaderParser.extractResponsePath(data, firstHop).getRemotePort());
+    // what the Shim forwards to
+    assertEquals(
+        ScionHeaderParser.extractDestinationSocketAddress(plain),
+        ScionHeaderParser.extractDestinationSocketAddress(data));
   }
 
   @Test
