@@ -111,16 +111,35 @@ class MarketplaceClientTest {
     assertArrayEquals(fromHex(BUY_REQUEST), request.getBody().readByteArray()); // the same as curl
   }
 
-  /** The marketplace answers an order it does not fill with 200 and no assets, as seen on tiny4. */
+  /**
+   * A 200 answer without asset IDs, as an empty body from a proxy would be: the client cannot tell
+   * what was bought.
+   */
   @Test
-  void testBuyAssetsNotBought() throws Exception {
+  void testBuyAssetsEmptyAnswer() throws Exception {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse(""));
     Marketplace.BuyAssetsRequest order =
         Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
     MarketplaceClient client = client(MARKETPLACE_CERT);
-    assertThrows(
-        IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    IOException e =
+        assertThrows(
+            IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    assertTrue(e.getMessage().contains("0 asset IDs, expected 1"), e.getMessage());
+  }
+
+  /** Two asset IDs for one order break the rule of one ID per order as much as none. */
+  @Test
+  void testBuyAssetsTooManyIds() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse("0a0a0a08000000000000000f0a0a0a080000000000000010")); // 15, 16
+    Marketplace.BuyAssetsRequest order =
+        Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
+    MarketplaceClient client = client(MARKETPLACE_CERT);
+    IOException e =
+        assertThrows(
+            IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    assertTrue(e.getMessage().contains("2 asset IDs, expected 1"), e.getMessage());
   }
 
   /**
