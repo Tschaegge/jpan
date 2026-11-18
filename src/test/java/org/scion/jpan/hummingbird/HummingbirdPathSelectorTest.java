@@ -48,6 +48,8 @@ class HummingbirdPathSelectorTest {
       ScionSocketAddress.from(
           ScionUtil.parseIA("1-ff00:0:111"), InetAddress.getLoopbackAddress(), 12345);
 
+  private static final String SERVICE = "/proto.hummingbird.v1.MarketplaceService/";
+
   private final MockWebServer marketplace = new MockWebServer();
 
   @AfterEach
@@ -117,7 +119,8 @@ class HummingbirdPathSelectorTest {
 
   /**
    * A failed renewal keeps the old path, which is still valid, and the timer tries again a second
-   * later. 16 s reservations renewed 4 s ahead are due 2 to 3 s after open().
+   * later; first it looks for what the failed attempt may have paid. 16 s reservations renewed 4 s
+   * ahead are due 2 to 3 s after open().
    */
   @Test
   void testRenewalFailureKeepsPath() throws Exception {
@@ -125,7 +128,7 @@ class HummingbirdPathSelectorTest {
       HummingbirdPathSelector selector = selector(16, 4);
       int requests = enqueuePurchase();
       marketplace.enqueue(new MockResponse().setResponseCode(503).setBody("{\"code\":\"down\"}"));
-      enqueuePurchase();
+      enqueuePurchase(true);
       enqueuePurchase(); // spare
       selector.open(REMOTE);
       try {
@@ -148,7 +151,8 @@ class HummingbirdPathSelectorTest {
   /**
    * A renewal that keeps failing is tried five times, all for the same window, with pauses of 1, 2,
    * 4 and 8 s in between, and then given up for one reservation duration. 16 s reservations renewed
-   * 4 s ahead are due 2 s after open(); every attempt fails at its first search.
+   * 4 s ahead are due 2 s after open(). Every attempt fails at its first call: the first at its
+   * search, the others at FetchReservations, since a retry first looks for what was paid.
    */
   @Test
   void testRetryPauses() throws Exception {
@@ -167,12 +171,19 @@ class HummingbirdPathSelectorTest {
         long[] at = new long[5];
         long[] start = new long[5];
         for (int i = 0; i < 5; i++) {
-          RecordedRequest search = marketplace.takeRequest(10, TimeUnit.SECONDS);
-          assertNotNull(search, "attempt " + (i + 1));
+          RecordedRequest call = marketplace.takeRequest(10, TimeUnit.SECONDS);
+          assertNotNull(call, "attempt " + (i + 1));
           at[i] = System.nanoTime();
-          Marketplace.SearchAssetsRequest asked =
-              Marketplace.SearchAssetsRequest.parseFrom(search.getBody().readByteArray());
-          start[i] = asked.getStartsAtLatest().getSeconds();
+          byte[] body = call.getBody().readByteArray();
+          if (i == 0) {
+            assertEquals(SERVICE + "SearchAssets", call.getPath(), "the first attempt buys");
+            start[i] =
+                Marketplace.SearchAssetsRequest.parseFrom(body).getStartsAtLatest().getSeconds();
+          } else {
+            assertEquals(SERVICE + "FetchReservations", call.getPath(), "a retry looks first");
+            start[i] =
+                Marketplace.FetchReservationsRequest.parseFrom(body).getStartsAt().getSeconds();
+          }
         }
         long[] pauses = {1, 2, 4, 8};
         for (int i = 0; i < 4; i++) {
@@ -318,18 +329,33 @@ class HummingbirdPathSelectorTest {
     return new FlyoverBuyer(client, 100000);
   }
 
+  /** {@link #enqueuePurchase(boolean)} for a first attempt, which buys without looking. */
+  private int enqueuePurchase() {
+    return enqueuePurchase(false);
+  }
+
   /**
    * Answers for one purchase on the path the selector picks: a search per AS, the purchase, a
    * redemption per AS. Reservation IDs count up, so every purchase gets new flyovers.
    *
+   * @param retry whether the purchase is a retry, which first looks for what was paid: then no
+   *     reservation, and in front of each search no own asset of the AS
    * @return the number of requests this purchase makes
    */
-  private int enqueuePurchase() {
+  private int enqueuePurchase(boolean retry) {
     Path scionPath = PathPolicy.MIN_HOPS.filter(Scion.defaultService().getPaths(REMOTE)).get(0);
     int ases = scionPath.getMetadata().getInterfaces().size() / 2 + 1;
     long stopsAt = System.currentTimeMillis() / 1000 + 3600;
+    if (retry) {
+      marketplace.enqueue(
+          FlyoverBuyerTest.protoResponse(
+              Marketplace.FetchReservationsResponse.getDefaultInstance()));
+    }
     Marketplace.BuyAssetsResponse.Builder bought = Marketplace.BuyAssetsResponse.newBuilder();
     for (int i = 0; i < ases; i++) {
+      if (retry) {
+        marketplace.enqueue(FlyoverBuyerTest.found());
+      }
       marketplace.enqueue(FlyoverBuyerTest.found(FlyoverBuyerTest.asset(i, 1, 1, 0, stopsAt)));
       bought.addAssets(Marketplace.BoughtAsset.getDefaultInstance());
     }
@@ -337,6 +363,6 @@ class HummingbirdPathSelectorTest {
     for (int i = 0; i < ases; i++) {
       marketplace.enqueue(FlyoverBuyerTest.redeemed(i, new byte[16]));
     }
-    return 2 * ases + 1;
+    return retry ? 3 * ases + 2 : 2 * ases + 1;
   }
 }

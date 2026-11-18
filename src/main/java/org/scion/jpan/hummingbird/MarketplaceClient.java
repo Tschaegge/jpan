@@ -113,12 +113,34 @@ public final class MarketplaceClient {
   List<Marketplace.SearchAsset> searchAssets(
       long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
       throws IOException {
+    return search(false, isdAs, ingress, egress, bandwidth, startTime, duration);
+  }
+
+  /**
+   * Like {@link #searchAssets}, but the assets this account bought and has not redeemed yet. A
+   * purchase whose answer got lost shows up here.
+   */
+  List<Marketplace.SearchAsset> ownedAssets(
+      long isdAs, int ingress, int egress, int bandwidth, long startTime, int duration)
+      throws IOException {
+    return search(true, isdAs, ingress, egress, bandwidth, startTime, duration);
+  }
+
+  private List<Marketplace.SearchAsset> search(
+      boolean owned,
+      long isdAs,
+      int ingress,
+      int egress,
+      int bandwidth,
+      long startTime,
+      int duration)
+      throws IOException {
     List<Marketplace.SearchAsset> assets = new ArrayList<>();
     // The marketplace counts pages from 0 and says whether another one follows.
     for (int page = 0; page < MAX_PAGES; page++) {
       byte[] request =
           Marketplace.SearchAssetsRequest.newBuilder()
-              .setOwned(false)
+              .setOwned(owned)
               .setIa(isdAs)
               .setIfIdIngress(ingress)
               .setIfIdEgress(egress)
@@ -195,6 +217,27 @@ public final class MarketplaceClient {
     Marketplace.RedeemAssetResponse response =
         Marketplace.RedeemAssetResponse.parseFrom(post("RedeemAsset", request));
     return response;
+  }
+
+  /**
+   * The reservations of this account, in all ASes, that have the bandwidth for the whole time
+   * window. A redemption whose answer got lost shows up here.
+   *
+   * @param bandwidth in kbit/s, not a codepoint
+   * @param startTime absolute Unix seconds
+   * @param duration length of the time window in seconds
+   */
+  List<Marketplace.Reservation> fetchReservations(int bandwidth, long startTime, int duration)
+      throws IOException {
+    byte[] request =
+        Marketplace.FetchReservationsRequest.newBuilder()
+            .setBandwidth(bandwidth)
+            .setStartsAt(Timestamp.newBuilder().setSeconds(startTime).build())
+            .setStopsAt(Timestamp.newBuilder().setSeconds(startTime + duration).build())
+            .build()
+            .toByteArray();
+    return Marketplace.FetchReservationsResponse.parseFrom(post("FetchReservations", request))
+        .getReservationsList();
   }
 
   /**

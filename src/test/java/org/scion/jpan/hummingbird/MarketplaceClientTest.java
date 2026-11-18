@@ -200,6 +200,64 @@ class MarketplaceClientTest {
         fromHex("1a08000000000000000f"), request.getBody().readByteArray()); // as curl
   }
 
+  /** The search for the own assets sends the same filters as testSearchAssets, and owned. */
+  @Test
+  void testOwnedAssets() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse(""));
+    long ia112 = ScionUtil.parseIA("1-ff00:0:112");
+
+    assertTrue(client(MARKETPLACE_CERT).ownedAssets(ia112, 0, 1, 1000, 1793705366L, 10).isEmpty());
+
+    Marketplace.SearchAssetsRequest sent =
+        Marketplace.SearchAssetsRequest.parseFrom(
+            server.takeRequest(2, TimeUnit.SECONDS).getBody().readByteArray());
+    Marketplace.SearchAssetsRequest notOwned =
+        Marketplace.SearchAssetsRequest.parseFrom(fromHex(SEARCH_REQUEST));
+    assertTrue(sent.getOwned());
+    assertEquals(notOwned, sent.toBuilder().setOwned(false).build());
+  }
+
+  /**
+   * One call for the whole path, as the Go client makes it: bandwidth and window, no AS. The key is
+   * 00 to 0f, as in testRedeemAsset.
+   */
+  @Test
+  void testFetchReservations() throws Exception {
+    long ia112 = ScionUtil.parseIA("1-ff00:0:112");
+    Marketplace.FetchReservationsResponse answer =
+        Marketplace.FetchReservationsResponse.newBuilder()
+            .addReservations(
+                Marketplace.Reservation.newBuilder()
+                    .setReservationId(7)
+                    .setIa(ia112)
+                    .setIngressId(0)
+                    .setEgressId(1)
+                    .setBandwidth(1004)
+                    .setDataplaneEncoding(276)
+                    .setStartsAt(com.google.protobuf.Timestamp.newBuilder().setSeconds(1793705366L))
+                    .setStopsAt(com.google.protobuf.Timestamp.newBuilder().setSeconds(1793705376L))
+                    .setAuthenticationKey(
+                        com.google.protobuf.ByteString.copyFrom(
+                            fromHex("000102030405060708090a0b0c0d0e0f"))))
+            .build();
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse(okio.ByteString.of(answer.toByteArray()).hex()));
+
+    List<Marketplace.Reservation> reservations =
+        client(MARKETPLACE_CERT).fetchReservations(1000, 1793705366L, 10);
+    assertEquals(answer.getReservationsList(), reservations);
+
+    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
+    assertEquals("/proto.hummingbird.v1.MarketplaceService/FetchReservations", request.getPath());
+    Marketplace.FetchReservationsRequest sent =
+        Marketplace.FetchReservationsRequest.parseFrom(request.getBody().readByteArray());
+    assertEquals(1000, sent.getBandwidth());
+    assertEquals(1793705366L, sent.getStartsAt().getSeconds());
+    assertEquals(1793705376L, sent.getStopsAt().getSeconds());
+    assertFalse(sent.hasIa() || sent.hasIngressId() || sent.hasEgressId());
+  }
+
   private static MockResponse protoResponse(String hex) {
     return new MockResponse()
         .addHeader("Content-Type", "application/proto")

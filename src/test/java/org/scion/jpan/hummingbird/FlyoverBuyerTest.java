@@ -25,6 +25,7 @@ import java.net.InetSocketAddress;
 import java.util.Arrays;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import okio.Buffer;
 import okio.ByteString;
 import org.junit.jupiter.api.AfterEach;
@@ -167,6 +168,128 @@ class FlyoverBuyerTest {
     assertTrue(e.getMessage().contains("ak must be 16 bytes"), e.getMessage());
   }
 
+  /**
+   * A retry takes the reservations of an earlier attempt and buys nothing: one call. The
+   * marketplace returns every reservation of the account that covers the window, so the others come
+   * back too; each differs from the one wanted in one point and stands in front of it.
+   */
+  @Test
+  void testLookFirstReservations() throws Exception {
+    server.enqueue(
+        protoResponse(
+            Marketplace.FetchReservationsResponse.newBuilder()
+                .addReservations(reservation(1, IA_112, 0, 1, START - 1)) // started earlier
+                .addReservations(reservation(2, IA_111, 0, 1, START)) // another AS
+                .addReservations(reservation(3, IA_112, 0, 1, START))
+                .addReservations(reservation(4, IA_110, 3, 1, START)) // another ingress
+                .addReservations(reservation(5, IA_110, 2, 3, START)) // another egress
+                .addReservations(reservation(6, IA_110, 2, 1, START))
+                .addReservations(reservation(7, IA_111, 41, 0, START))
+                .build()));
+    Path path = tiny4();
+    Flyover[] flyovers = buyer().buyPath(path, 1000, START, 10, true);
+
+    assertEquals(1, server.getRequestCount());
+    Marketplace.FetchReservationsRequest fetch =
+        Marketplace.FetchReservationsRequest.parseFrom(
+            server.takeRequest().getBody().readByteArray());
+    assertEquals(START, fetch.getStartsAt().getSeconds());
+    assertEquals(3, flyovers[0].getResID());
+    assertEquals(6, flyovers[1].getResID());
+    assertEquals(7, flyovers[3].getResID());
+    // The rest of a flyover comes from the reservation.
+    assertEquals(276, flyovers[0].getBw());
+    assertEquals(START, flyovers[0].getStartTime());
+    assertEquals(20, flyovers[0].getDuration());
+    assertArrayEquals(KEY, flyovers[0].getAk());
+    new HummingbirdRequestPath(path, flyovers);
+  }
+
+  /**
+   * A purchase whose answer got lost: the retry redeems the assets it bought instead of buying them
+   * again. AS 112 has a reservation already. AS 110 owns the asset of the lost purchase. AS 111
+   * owns only an asset of another window, so its flyover is bought.
+   */
+  @Test
+  void testLookFirstOwnedAssets() throws Exception {
+    server.enqueue(
+        protoResponse(
+            Marketplace.FetchReservationsResponse.newBuilder()
+                .addReservations(reservation(3, IA_112, 0, 1, START))
+                .build()));
+    server.enqueue(found(owned(29, IA_110, 2, 3, START), owned(30, IA_110, 2, 1, START)));
+    server.enqueue(found(owned(31, IA_111, 41, 0, START - 1)));
+    server.enqueue(found(asset(5, 1, 10, 0, START + 3600))); // the search at AS 111
+    server.enqueue(redeemed(RES_ID, new byte[16])); // asset 30
+    server.enqueue(protoResponse(bought(1)));
+    server.enqueue(redeemed(RES_ID + 1, new byte[16]));
+    Path path = tiny4();
+    Flyover[] flyovers = buyer().buyPath(path, 1000, START, 10, true);
+
+    assertEquals(
+        "/proto.hummingbird.v1.MarketplaceService/FetchReservations",
+        server.takeRequest().getPath());
+    assertSearch(true, IA_110, 2, 1);
+    assertSearch(true, IA_111, 41, 0);
+    assertSearch(false, IA_111, 41, 0);
+    Marketplace.RedeemAssetRequest redeem =
+        Marketplace.RedeemAssetRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+    assertEquals(30, redeem.getIfPairAssetId().byteAt(0));
+    Marketplace.BuyAssetsRequest buy =
+        Marketplace.BuyAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+    assertEquals(1, buy.getAssetsCount());
+    assertEquals(5, buy.getAssets(0).getAssetId().byteAt(0));
+
+    assertEquals(3, flyovers[0].getResID());
+    assertEquals(RES_ID, flyovers[1].getResID());
+    assertEquals(20, flyovers[1].getDuration()); // the window the asset was bought for
+    assertEquals(RES_ID + 1, flyovers[3].getResID());
+    new HummingbirdRequestPath(path, flyovers);
+  }
+
+  /** If a lookup fails, the retry cannot know what was paid, so it buys and redeems nothing. */
+  @Test
+  void testLookFirstFails() throws Exception {
+    server.enqueue(protoResponse(Marketplace.FetchReservationsResponse.getDefaultInstance()));
+    server.enqueue(new MockResponse().setResponseCode(503).setBody("{\"code\":\"unavailable\"}"));
+    FlyoverBuyer buyer = buyer();
+    Path path = tiny4();
+    assertThrows(IOException.class, () -> buyer.buyPath(path, 1000, START, 10, true));
+    assertEquals(2, server.getRequestCount()); // FetchReservations and the first own assets
+  }
+
+  private static final byte[] KEY = fromHex("000102030405060708090a0b0c0d0e0f");
+
+  /** A reservation of the account at 1000 kbit/s that lasts 20 s, with KEY. */
+  private static Marketplace.Reservation reservation(
+      int resId, long isdAs, int ingress, int egress, long start) {
+    return Marketplace.Reservation.newBuilder()
+        .setReservationId(resId)
+        .setIa(isdAs)
+        .setIngressId(ingress)
+        .setEgressId(egress)
+        .setBandwidth(1004) // rounded up by the AS
+        .setDataplaneEncoding(276)
+        .setStartsAt(Timestamp.newBuilder().setSeconds(start))
+        .setStopsAt(Timestamp.newBuilder().setSeconds(start + 20))
+        .setAuthenticationKey(com.google.protobuf.ByteString.copyFrom(KEY))
+        .build();
+  }
+
+  /** An asset the account bought for 20 s of 1000 kbit/s and has not redeemed. */
+  private static Marketplace.SearchAsset owned(
+      int id, long isdAs, int ingress, int egress, long start) {
+    return Marketplace.SearchAsset.newBuilder()
+        .setAssetId(com.google.protobuf.ByteString.copyFrom(new byte[] {(byte) id}))
+        .setIa(isdAs)
+        .setIfIdIngress(ingress)
+        .setIfIdEgress(egress)
+        .setBandwidth(1000)
+        .setStartsAt(Timestamp.newBuilder().setSeconds(start))
+        .setStopsAt(Timestamp.newBuilder().setSeconds(start + 20))
+        .build();
+  }
+
   /** The tiny4 path 112 -> 110 -> 111 with the interfaces the control service reports for it. */
   private static Path tiny4() {
     return path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41);
@@ -241,9 +364,17 @@ class FlyoverBuyerTest {
             .build());
   }
 
+  /** The next request is a search for assets for sale: buyPath without lookFirst never looks. */
   private void assertSearch(long isdAs, int ingress, int egress) throws Exception {
+    assertSearch(false, isdAs, ingress, egress);
+  }
+
+  private void assertSearch(boolean owned, long isdAs, int ingress, int egress) throws Exception {
+    RecordedRequest request = server.takeRequest();
+    assertEquals("/proto.hummingbird.v1.MarketplaceService/SearchAssets", request.getPath());
     Marketplace.SearchAssetsRequest search =
-        Marketplace.SearchAssetsRequest.parseFrom(server.takeRequest().getBody().readByteArray());
+        Marketplace.SearchAssetsRequest.parseFrom(request.getBody().readByteArray());
+    assertEquals(owned, search.getOwned());
     assertEquals(ScionUtil.toStringIA(isdAs), ScionUtil.toStringIA(search.getIa()));
     assertEquals(ingress + ">" + egress, search.getIfIdIngress() + ">" + search.getIfIdEgress());
   }

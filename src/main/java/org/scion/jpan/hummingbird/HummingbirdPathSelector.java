@@ -128,7 +128,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   public void open(ScionSocketAddress remote) {
     super.open(remote);
     try {
-      buy(System.currentTimeMillis() / 1000 - BACKDATE);
+      buy(System.currentTimeMillis() / 1000 - BACKDATE, false);
     } catch (IOException e) {
       close();
       throw new UncheckedIOException(e);
@@ -214,7 +214,8 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
 
   /**
    * One attempt of the purchase the timer is trying to make. Every attempt of it asks for the same
-   * window, from the start of its first attempt.
+   * window, from the start of its first attempt, so that a retry finds what a failed attempt may
+   * have paid for without the answer arriving.
    *
    * @return false if the purchase failed
    */
@@ -223,7 +224,8 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       roundStart = now - BACKDATE;
     }
     try {
-      buy(roundStart);
+      buy(roundStart, attempts > 0); // the first attempt of a window cannot find anything
+
       sentSinceBought = false;
       roundStart = 0;
       attempts = 0;
@@ -250,13 +252,15 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
    * @param start of the reservations in Unix seconds, in the past: the packet carries the offset
    *     from start to its BaseTimestamp unsigned, so a future start wraps it, and the routers
    *     derive a different Ak and drop every packet
+   * @param lookFirst whether to take what this account already has for the window, see {@link
+   *     FlyoverBuyer}
    */
-  private void buy(long start) throws IOException {
+  private void buy(long start, boolean lookFirst) throws IOException {
     Path current = super.getPath(); // not getPath(): that is the Hummingbird path
     if (current == null) {
       return;
     }
-    Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration);
+    Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration, lookFirst);
     path = new HummingbirdRequestPath(current, bought);
     scionPath = current;
     flyovers = bought;
