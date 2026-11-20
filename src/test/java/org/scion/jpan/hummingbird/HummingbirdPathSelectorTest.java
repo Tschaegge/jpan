@@ -88,6 +88,29 @@ class HummingbirdPathSelectorTest {
   }
 
   /**
+   * A destination in the own AS has no border router on the way: open() buys nothing, and the
+   * channel gets the empty SCION path, also later when the timer has looked at it.
+   */
+  @Test
+  void testOpenLocalAs() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      HummingbirdPathSelector selector = selector(60, 20);
+      ScionSocketAddress local =
+          ScionSocketAddress.from(
+              ScionUtil.parseIA("1-ff00:0:112"), InetAddress.getLoopbackAddress(), 12345);
+      selector.open(local);
+      try {
+        assertEquals(0, selector.getPath().getPathType()); // EMPTY; this getPath() wakes renew()
+        Thread.sleep(500);
+        assertEquals(0, selector.getPath().getPathType());
+        assertEquals(0, marketplace.getRequestCount());
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
    * 18 s reservations start 10 s back and are renewed 4 s ahead, so the renewal is due 4 s after
    * the start of the second in which they were bought. Bought at 12.85 s, the start is 2 s and the
    * renewal is due at 16 s. The alarm is set in whole seconds, so it rings up to a second after

@@ -57,7 +57,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   private final int duration;
   private final int renewBefore;
   // Written by open() and the timer, read by every write() of the channel.
-  private volatile HummingbirdRequestPath path;
+  private volatile Path path;
   // What path was built from, to rebuild it when the SCION path gets new bytes for the same route.
   private volatile Path scionPath;
   private volatile Flyover[] flyovers;
@@ -120,9 +120,11 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   }
 
   /**
-   * Finds the SCION paths to remote and buys flyovers for the best one.
+   * Finds the SCION paths to remote and buys flyovers for the best one. A destination in the own AS
+   * needs none, since no border router is on the way.
    *
-   * @throws java.io.UncheckedIOException if the purchase fails; the selector is closed again
+   * @throws java.io.UncheckedIOException if the purchase fails; the selector is closed again, as
+   *     for any other exception
    */
   @Override
   public void open(ScionSocketAddress remote) {
@@ -132,6 +134,9 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     } catch (IOException e) {
       close();
       throw new UncheckedIOException(e);
+    } catch (RuntimeException e) {
+      close();
+      throw e;
     }
     sentSinceBought = false;
     // Nothing to do until the reservations run low.
@@ -260,6 +265,14 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     if (current == null) {
       return;
     }
+    // A destination in the own AS
+    if (current.getRawPath().length == 0) {
+      path = current;
+      scionPath = current;
+      flyovers = new Flyover[0]; // not null: open() is done
+      expiry = expiryOf(flyovers); // Long.MAX_VALUE, so a renewal is never due
+      return;
+    }
     Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration, lookFirst);
     path = new HummingbirdRequestPath(current, bought);
     scionPath = current;
@@ -307,8 +320,9 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   }
 
   /**
-   * @return the Hummingbird path with the bought flyovers, null before {@link #open}, after {@link
-   *     #close} or if there is no path to the destination
+   * @return the Hummingbird path with the bought flyovers, or the empty SCION path for a
+   *     destination in the own AS; null before {@link #open}, after {@link #close} or if there is
+   *     no path to the destination
    */
   @Override
   public Path getPath() {
