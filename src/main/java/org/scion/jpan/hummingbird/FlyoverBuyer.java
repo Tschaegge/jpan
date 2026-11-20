@@ -40,7 +40,7 @@ public final class FlyoverBuyer {
    *
    * @param marketplace where the flyovers are bought
    * @param maxPrice the most one purchase of {@link #buyPath}, all flyovers of the path together,
-   *     may cost, in the smallest unit of the marketplace's currency (CHF cents on tiny4)
+   *     may cost, in the smallest unit of the marketplace's currency.
    */
   public FlyoverBuyer(MarketplaceClient marketplace, long maxPrice) {
     this.marketplace = marketplace;
@@ -65,7 +65,7 @@ public final class FlyoverBuyer {
    * @throws IllegalStateException if {@code scionPath} is not a SCION {@link
    *     org.scion.jpan.RequestPath}
    * @throws IllegalArgumentException if the path is empty, as for a destination in the local AS, or
-   *     its metadata has more than two interfaces per link
+   *     its metadata does not have two interfaces per link
    */
   public Flyover[] buyPath(Path scionPath, int bandwidth, long startTime, int duration)
       throws IOException {
@@ -89,32 +89,42 @@ public final class FlyoverBuyer {
     Flyover[] flyovers = new Flyover[path.getHopFieldCount()];
     // The hop fields carry no ISD-AS, so it comes from the metadata.
     List<PathMetadata.PathInterface> interfaces = scionPath.getMetadata().getInterfaces();
+    // One slot per AS: at a segment change the AS has two hop fields, the second without a flyover.
+    List<Integer> asSlots = new ArrayList<>(); // asSlots.get(n) is the slot of the n-th AS
+    for (int i = 0; i < flyovers.length; i++) {
+      if (path.getCrossOver(i) != 1) {
+        asSlots.add(i);
+      }
+    }
+    // Two entries per link, so every AS except the first and the last appears twice. Checked
+    // before the first call, so that broken metadata costs no call to the marketplace.
+    int asCount = asSlots.size();
+    if (interfaces.size() != 2 * (asCount - 1)) {
+      throw new IllegalArgumentException(
+          String.format(
+              "The path has %d ASes, so its metadata needs %d interfaces, not %d",
+              asCount, 2 * (asCount - 1), interfaces.size()));
+    }
+
     // One call for all ASes: the marketplace returns every reservation that covers the window.
     List<Marketplace.Reservation> reservations =
         lookFirst
             ? marketplace.fetchReservations(bandwidth, startTime, duration)
             : Collections.<Marketplace.Reservation>emptyList();
-
     List<Marketplace.BuyAsset> orders = new ArrayList<>();
     List<Integer> slots = new ArrayList<>(); // slots.get(n) is the slot of orders.get(n)
     List<Marketplace.SearchAsset> owned = new ArrayList<>(); // bought before, to redeem
     List<Integer> ownedSlots = new ArrayList<>(); // ownedSlots.get(n) is the slot of owned.get(n)
-    int asCount = 0; // ASes so far, not slots: a crossover AS has two slots
-    for (int i = 0; i < flyovers.length; i++) {
-      if (path.getCrossOver(i) == 1) {
-        continue;
-      }
-      // Two entries per link, so every AS except from the first and last appears twice.
-      int ifIndex = asCount == 0 ? 0 : 2 * asCount - 1;
-      long isdAs = interfaces.get(ifIndex).getIsdAs();
-      asCount++;
-      int ingress = path.getFlyoverIngress(i);
-      int egress = path.getFlyoverEgress(i);
+    for (int n = 0; n < asCount; n++) {
+      int slot = asSlots.get(n);
+      long isdAs = interfaces.get(n == 0 ? 0 : 2 * n - 1).getIsdAs();
+      int ingress = path.getFlyoverIngress(slot);
+      int egress = path.getFlyoverEgress(slot);
       if (lookFirst) {
         Marketplace.Reservation reservation =
             findReservation(reservations, isdAs, ingress, egress, startTime);
         if (reservation != null) {
-          flyovers[i] = flyover(ingress, egress, reservation);
+          flyovers[slot] = flyover(ingress, egress, reservation);
           continue;
         }
         Marketplace.SearchAsset asset =
@@ -126,20 +136,13 @@ public final class FlyoverBuyer {
                 startTime);
         if (asset != null) {
           owned.add(asset);
-          ownedSlots.add(i);
+          ownedSlots.add(slot);
           continue;
         }
       }
-      // chooseOrder throws if no asset fits. Nothing is bought or redeemed before the loop ends.
+      // chooseOrder throws if no asset fits. Nothing is bought or redeemed before this loop ends.
       orders.add(chooseOrder(isdAs, ingress, egress, bandwidth, startTime, duration));
-      slots.add(i);
-    }
-    // Before buying we want to make sure the number of interfaces is what we expect
-    if (interfaces.size() != 2 * (asCount - 1)) {
-      throw new IllegalArgumentException(
-          String.format(
-              "The path has %d ASes, so its metadata needs %d interfaces, not %d",
-              asCount, 2 * (asCount - 1), interfaces.size()));
+      slots.add(slot);
     }
 
     // Assets an earlier attempt bought: redeemed over the window they were bought for.

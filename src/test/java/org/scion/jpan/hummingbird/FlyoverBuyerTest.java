@@ -101,15 +101,34 @@ class FlyoverBuyerTest {
     assertSearch(IA_111, 4, 0);
   }
 
-  /** Metadata with more interfaces than the bytes have links is refused before paying. */
+  /** Metadata with more interfaces than the bytes have links is refused before the first call. */
   @Test
-  void testBuyPathWrongMetadata() {
+  void testBuyPathTooManyInterfaces() {
     long[] tooMany = {IA_112, 1, IA_110, 2, IA_110, 1, IA_111, 41, IA_111, 42, IA_112, 2};
     Path path = path(HummingbirdRequestPathTest.TINY4_PATH, tooMany);
     IllegalArgumentException e =
         assertThrows(IllegalArgumentException.class, () -> buyPath(path, 3));
     assertEquals("The path has 3 ASes, so its metadata needs 4 interfaces, not 6", e.getMessage());
-    assertEquals(3, server.getRequestCount()); // the three searches, no BuyAssets
+    assertEquals(0, server.getRequestCount());
+  }
+
+  /** Metadata with fewer interfaces than the bytes have links is refused before the first call. */
+  @Test
+  void testBuyPathTooFewInterfaces() {
+    Path path = path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2);
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> buyPath(path, 3));
+    assertEquals("The path has 3 ASes, so its metadata needs 4 interfaces, not 2", e.getMessage());
+    assertEquals(0, server.getRequestCount());
+  }
+
+  /** A retry checks the metadata before it looks for earlier purchases, too. */
+  @Test
+  void testBuyPathTooFewInterfacesLookFirst() throws Exception {
+    Path path = path(HummingbirdRequestPathTest.TINY4_PATH, IA_112, 1, IA_110, 2);
+    FlyoverBuyer buyer = buyer();
+    assertThrows(IllegalArgumentException.class, () -> buyer.buyPath(path, 1000, START, 10, true));
+    assertEquals(0, server.getRequestCount());
   }
 
   /** If the first AS has no asset, the search stops there and nothing is bought. */

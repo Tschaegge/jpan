@@ -14,9 +14,6 @@
 
 package org.scion.jpan.hummingbird;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import java.io.IOException;
@@ -41,10 +38,13 @@ import org.scion.jpan.proto.hummingbird.Marketplace;
 import org.scion.jpan.proto.hummingbird.MarketplaceServiceGrpc;
 
 /**
- * Talks to a Hummingbird marketplace with the Connect protocol: every call is an HTTPS POST of a
+ * Talks to a Hummingbird marketplace with the Connect protocol: every call is an HTTP POST of a
  * protobuf message from marketplace.proto to /proto.hummingbird.v1.MarketplaceService/[method].
- * Applications only create it and hand it to {@link FlyoverBuyer}; the calls themselves stay inside
+ * Applications only create it and hand it to {@link FlyoverBuyer}. The calls themselves stay inside
  * this package, so no generated protobuf class becomes part of JPAN's API.
+ *
+ * <p>Every call uses OkHttp's default timeouts: 10 s each to connect, to send and between reads,
+ * and no limit for the whole call.
  */
 public final class MarketplaceClient {
 
@@ -61,7 +61,8 @@ public final class MarketplaceClient {
    * For a marketplace whose certificate comes from a CA the JVM trusts.
    *
    * @param baseUrl for example https://marketplace.example.org:31888
-   * @param jwt the token of the marketplace account, sent with every call
+   * @param jwt the token of the marketplace account, sent with every call, in cleartext if {@code
+   *     baseUrl} is http
    * @throws IllegalArgumentException if {@code baseUrl} isn't an http(s) URL
    */
   public MarketplaceClient(String baseUrl, String jwt) {
@@ -73,7 +74,8 @@ public final class MarketplaceClient {
    * topology.
    *
    * @param baseUrl for example https://marketplace.local:31888
-   * @param jwt the token of the marketplace account, sent with every call
+   * @param jwt the token of the marketplace account, sent with every call, in cleartext if {@code
+   *     baseUrl} is http
    * @param certificate the only certificate this client trusts
    * @param address where the host of baseUrl is, for example 127.0.0.1
    * @throws IllegalArgumentException if {@code baseUrl} isn't an http(s) URL, or if the client
@@ -90,12 +92,6 @@ public final class MarketplaceClient {
     this.jwt = jwt;
     // Never resend on our own: a call that reached the marketplace may already have bought.
     this.httpClient = httpClient.newBuilder().retryOnConnectionFailure(false).build();
-  }
-
-  /** The attributes of the marketplace, for example its currency. */
-  Marketplace.MarketplaceInfoResponse info() throws IOException {
-    byte[] request = Marketplace.MarketplaceInfoRequest.getDefaultInstance().toByteArray();
-    return Marketplace.MarketplaceInfoResponse.parseFrom(post("Info", request));
   }
 
   /**
@@ -161,12 +157,13 @@ public final class MarketplaceClient {
   }
 
   /**
-   * One part of an asset to buy with {@link #buyAssets}.
+   * The order for one slice of an asset: exactly this time window and bandwidth. It only builds the
+   * message for {@link #buyAssets} and sends nothing.
    *
-   * @param assetId the asset to buy from, as {@link #searchAssets} returns it
+   * @param assetId the asset to cut the slice from, as {@link #searchAssets} returns it
    * @param bandwidth in kbit/s, not a codepoint
    * @param startTime absolute Unix seconds
-   * @param duration length of the part in seconds
+   * @param duration length of the slice in seconds
    */
   static Marketplace.BuyAsset order(
       ByteString assetId, int bandwidth, long startTime, int duration) {
@@ -179,13 +176,16 @@ public final class MarketplaceClient {
   }
 
   /**
-   * Buys parts of assets, all or none: the marketplace buys nothing if one part cannot be bought or
-   * the total exceeds maxPrice. Every bought part becomes an asset of its own with a new ID.
+   * Buys one slice each of several assets, all or none: the marketplace buys nothing if one slice
+   * cannot be bought or the total exceeds maxPrice. Every bought slice becomes an asset of its own
+   * with a new ID.
    *
-   * @param assets what to buy, each part made with {@link #order}
-   * @param maxPrice the most the whole purchase may cost, in the unit of {@link #info()}
-   * @return the IDs of the bought assets, in the order of the request, and the cost
-   * @throws IOException also if the marketplace returns fewer assets than requested
+   * @param assets what to buy, each slice made with {@link #order}
+   * @param maxPrice the most the whole purchase may cost
+   * @return the IDs of the bought assets, in the same order as {@code assets}, and the total cost
+   *     including fees
+   * @throws IOException if the marketplace bought nothing, or if its answer was lost or malformed:
+   *     then it may have bought everything, and the assets stay unredeemed on the account
    */
   Marketplace.BuyAssetsResponse buyAssets(List<Marketplace.BuyAsset> assets, long maxPrice)
       throws IOException {
@@ -197,26 +197,28 @@ public final class MarketplaceClient {
             .toByteArray();
     Marketplace.BuyAssetsResponse response =
         Marketplace.BuyAssetsResponse.parseFrom(post("BuyAssets", request));
-    if (response.getAssetsCount() < assets.size()) {
+    // One ID per order, or the caller cannot tell which ID belongs to which order.
+    if (response.getAssetsCount() != assets.size()) {
       throw new IOException(
-          "Marketplace bought " + response.getAssetsCount() + " of " + assets.size() + " assets");
+          "Marketplace answered BuyAssets with "
+              + response.getAssetsCount()
+              + " asset IDs, expected "
+              + assets.size());
     }
     return response;
   }
 
   /**
-   * Turns a bought asset into a reservation: the AS, or the marketplace on its behalf, derives the
-   * authentication key A_K for it. Interfaces and time window are those of the asset.
+   * Turns a bought asset into a reservation, with the authentication key A_K for its flyover.
+   * Interfaces and time window are those of the asset.
    *
-   * @param assetId the ID of a bought interface-pair asset, as {@link #buyAssets} returns it
+   * @param assetId the ID of a bought asset, as {@link #buyAssets} returns it
    * @return the authentication key, the reservation ID and the bandwidth as a codepoint
    */
   Marketplace.RedeemAssetResponse redeemAsset(ByteString assetId) throws IOException {
     byte[] request =
         Marketplace.RedeemAssetRequest.newBuilder().setIfPairAssetId(assetId).build().toByteArray();
-    Marketplace.RedeemAssetResponse response =
-        Marketplace.RedeemAssetResponse.parseFrom(post("RedeemAsset", request));
-    return response;
+    return Marketplace.RedeemAssetResponse.parseFrom(post("RedeemAsset", request));
   }
 
   /**
@@ -249,7 +251,6 @@ public final class MarketplaceClient {
    * @throws IOException if the marketplace cannot be reached or answers with an error
    */
   private byte[] post(String method, byte[] request) throws IOException {
-
     Request httpRequest =
         new Request.Builder()
             .url(this.baseUrl + SERVICE_PATH + method)
@@ -261,24 +262,11 @@ public final class MarketplaceClient {
       if (response.isSuccessful()) {
         return response.body().bytes();
       }
-      String error = describeError(response.code(), response.body().string());
-      throw new IOException("Marketplace call " + method + " failed: " + error);
-    }
-  }
-
-  /**
-   * The code and message of a Connect error, {@code {"code": ..., "message": ...}}. A proxy or a
-   * crashed server may send something else, then the HTTP status and the start of the body.
-   */
-  private static String describeError(int httpStatus, String body) {
-    try {
-      JsonObject error = JsonParser.parseString(body).getAsJsonObject();
-      String code = error.get("code").getAsString();
-      JsonElement message = error.get("message"); // optional in Connect
-      return message == null ? code : code + ": " + message.getAsString();
-    } catch (RuntimeException e) { // not JSON, not an object, or no code
+      // A Connect error is JSON with code and message, but a proxy may send HTML.
+      String body = response.body().string();
       String start = body.length() > 200 ? body.substring(0, 200) + "..." : body;
-      return "HTTP " + httpStatus + ": " + start;
+      throw new IOException(
+          "Marketplace call " + method + " failed: HTTP " + response.code() + ": " + start);
     }
   }
 

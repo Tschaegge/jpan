@@ -50,29 +50,9 @@ class MarketplaceClientTest {
     server.shutdown();
   }
 
-  @Test
-  void testInfo() throws Exception {
-    Marketplace.MarketplaceInfoResponse info =
-        Marketplace.MarketplaceInfoResponse.newBuilder()
-            .setCurrency("CHF")
-            .setCurrencyExponent(2)
-            .build();
-    start(MARKETPLACE_CERT);
-    server.enqueue(
-        new MockResponse()
-            .addHeader("Content-Type", "application/proto")
-            .setBody(new Buffer().write(info.toByteArray())));
-
-    Marketplace.MarketplaceInfoResponse answer = client(MARKETPLACE_CERT).info();
-    assertEquals("CHF", answer.getCurrency());
-    assertEquals(2, answer.getCurrencyExponent());
-
-    RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
-    assertEquals("/proto.hummingbird.v1.MarketplaceService/Info", request.getPath());
-    assertEquals("application/proto", request.getHeader("Content-Type"));
-    assertEquals("Bearer test-jwt", request.getHeader("Authorization"));
-    assertEquals(0, request.getBodySize()); // an empty MarketplaceInfoRequest has no bytes
-  }
+  /** Asset 15, which testBuyAssets bought on tiny4. */
+  private static final com.google.protobuf.ByteString ASSET_15 =
+      com.google.protobuf.ByteString.copyFrom(fromHex("000000000000000f"));
 
   /**
    * A search on tiny4 at AS 112 with the pair (0, 1) for 10 s of 1000 kbit/s from 2026-11-03
@@ -131,16 +111,35 @@ class MarketplaceClientTest {
     assertArrayEquals(fromHex(BUY_REQUEST), request.getBody().readByteArray()); // the same as curl
   }
 
-  /** The marketplace answers an order it does not fill with 200 and no assets, as seen on tiny4. */
+  /**
+   * A 200 answer without asset IDs, as an empty body from a proxy would be: the client cannot tell
+   * what was bought.
+   */
   @Test
-  void testBuyAssetsNotBought() throws Exception {
+  void testBuyAssetsEmptyAnswer() throws Exception {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse(""));
     Marketplace.BuyAssetsRequest order =
         Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
     MarketplaceClient client = client(MARKETPLACE_CERT);
-    assertThrows(
-        IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    IOException e =
+        assertThrows(
+            IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    assertTrue(e.getMessage().contains("0 asset IDs, expected 1"), e.getMessage());
+  }
+
+  /** Two asset IDs for one order break the rule of one ID per order as much as none. */
+  @Test
+  void testBuyAssetsTooManyIds() throws Exception {
+    start(MARKETPLACE_CERT);
+    server.enqueue(protoResponse("0a0a0a08000000000000000f0a0a0a080000000000000010")); // 15, 16
+    Marketplace.BuyAssetsRequest order =
+        Marketplace.BuyAssetsRequest.parseFrom(fromHex(BUY_REQUEST));
+    MarketplaceClient client = client(MARKETPLACE_CERT);
+    IOException e =
+        assertThrows(
+            IOException.class, () -> client.buyAssets(order.getAssetsList(), order.getMaxPrice()));
+    assertTrue(e.getMessage().contains("2 asset IDs, expected 1"), e.getMessage());
   }
 
   /**
@@ -179,15 +178,14 @@ class MarketplaceClientTest {
 
   /**
    * Redeeming asset 15 from testBuyAssets on tiny4. The real 16-byte key is replaced by 00 to 0f.
+   * Also checks the headers, which every call carries.
    */
   @Test
   void testRedeemAsset() throws Exception {
     start(MARKETPLACE_CERT);
     server.enqueue(protoResponse("0a10000102030405060708090a0b0c0d0e0f18ec07209402"));
-    com.google.protobuf.ByteString asset15 =
-        com.google.protobuf.ByteString.copyFrom(fromHex("000000000000000f"));
 
-    Marketplace.RedeemAssetResponse reservation = client(MARKETPLACE_CERT).redeemAsset(asset15);
+    Marketplace.RedeemAssetResponse reservation = client(MARKETPLACE_CERT).redeemAsset(ASSET_15);
     assertArrayEquals(
         fromHex("000102030405060708090a0b0c0d0e0f"),
         reservation.getAuthenticationKey().toByteArray());
@@ -196,6 +194,8 @@ class MarketplaceClientTest {
 
     RecordedRequest request = server.takeRequest(2, TimeUnit.SECONDS);
     assertEquals("/proto.hummingbird.v1.MarketplaceService/RedeemAsset", request.getPath());
+    assertEquals("application/proto", request.getHeader("Content-Type"));
+    assertEquals("Bearer test-jwt", request.getHeader("Authorization"));
     assertArrayEquals(
         fromHex("1a08000000000000000f"), request.getBody().readByteArray()); // as curl
   }
@@ -274,7 +274,8 @@ class MarketplaceClientTest {
             .addHeader("Content-Type", "application/json")
             .setBody("{\"code\":\"unauthenticated\",\"message\":\"missing bearer token\"}"));
 
-    IOException e = assertThrows(IOException.class, () -> client(MARKETPLACE_CERT).info());
+    IOException e =
+        assertThrows(IOException.class, () -> client(MARKETPLACE_CERT).redeemAsset(ASSET_15));
     assertTrue(e.getMessage().contains("unauthenticated"), e.getMessage());
     assertTrue(e.getMessage().contains("missing bearer token"), e.getMessage());
   }
@@ -284,7 +285,8 @@ class MarketplaceClientTest {
   void testErrorNotConnect() {
     start(MARKETPLACE_CERT);
     server.enqueue(new MockResponse().setResponseCode(502).setBody("<html>Bad Gateway</html>"));
-    IOException e = assertThrows(IOException.class, () -> client(MARKETPLACE_CERT).info());
+    IOException e =
+        assertThrows(IOException.class, () -> client(MARKETPLACE_CERT).redeemAsset(ASSET_15));
     assertTrue(e.getMessage().contains("HTTP 502: <html>Bad Gateway</html>"), e.getMessage());
   }
 
@@ -311,7 +313,7 @@ class MarketplaceClientTest {
   @Test
   void testRejectsOtherCertificate() {
     start(certificate());
-    assertThrows(SSLException.class, () -> client(MARKETPLACE_CERT).info());
+    assertThrows(SSLException.class, () -> client(MARKETPLACE_CERT).redeemAsset(ASSET_15));
   }
 
   /** A base URL that OkHttp cannot call fails in the constructor, not on the first call. */

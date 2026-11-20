@@ -23,12 +23,12 @@ import org.scion.jpan.internal.header.HeaderConstants;
 import org.scion.jpan.internal.header.HummingbirdPathConverter;
 
 /**
- * A Hummingbird path for requests, with flyovers for sending with reservations. It keeps the
- * metadata of the SCION {@link RequestPath} it was built from, but its raw bytes are a Hummingbird
- * path, so {@link PathMetadata#getRawPath()} still returns the SCION bytes. Send it through {@link
- * org.scion.jpan.ScionDatagramChannel#send(java.nio.ByteBuffer, Path)}, through a connected
- * channel, or through a {@link org.scion.jpan.ScionDatagramSocket} with a {@link
- * org.scion.jpan.ScionDatagramPacket}.
+ * A Hummingbird path for requests, with flyovers for sending with reservations. {@link
+ * #getRawPath()} returns the Hummingbird bytes. {@link #getMetadata()} is the metadata of the SCION
+ * {@link RequestPath} it was built from, so its {@link PathMetadata#getRawPath()} still returns the
+ * SCION bytes. Send it through {@link org.scion.jpan.ScionDatagramChannel#send(java.nio.ByteBuffer,
+ * Path)}, through a connected channel, or through a {@link org.scion.jpan.ScionDatagramSocket} with
+ * a {@link org.scion.jpan.ScionDatagramPacket}.
  */
 public class HummingbirdRequestPath extends RequestPath {
 
