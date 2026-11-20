@@ -20,7 +20,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -104,6 +106,44 @@ class HummingbirdPathSelectorTest {
         Thread.sleep(500);
         assertEquals(0, selector.getPath().getPathType());
         assertEquals(0, marketplace.getRequestCount());
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
+   * close() forgets the reservations it threw away. Reopened at a moment without a path, the
+   * selector buys as soon as a path appears and the application sends, not only when the discarded
+   * reservations would have run low, 570 s later here.
+   */
+  @Test
+  void testReopenWithoutPathBuysWhenPathAppears() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      AtomicBoolean noPaths = new AtomicBoolean(false);
+      PathPolicy policy =
+          paths ->
+              noPaths.get() ? Collections.<Path>emptyList() : PathPolicy.MIN_HOPS.filter(paths);
+      HummingbirdPathSelector selector =
+          HummingbirdPathSelector.create(Scion.defaultService(), policy, buyer(), 1000, 600, 20);
+      enqueuePurchase();
+      selector.open(REMOTE); // buys reservations that run for about 590 s more
+      selector.close();
+
+      noPaths.set(true);
+      selector.open(REMOTE); // no path, so nothing to buy
+      try {
+        assertNull(selector.getPath());
+        enqueuePurchase();
+        noPaths.set(false);
+        selector.refresh();
+        Path path = null;
+        for (int i = 0; i < 40 && path == null; i++) { // each getPath() is a packet sent
+          path = selector.getPath();
+          Thread.sleep(100);
+        }
+        assertNotNull(path, "no purchase within 4 s after the path appeared");
+        assertEquals(5, path.getPathType());
       } finally {
         selector.close();
       }

@@ -317,6 +317,8 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     roundStart = 0;
     attempts = 0;
     nextAttemptAt = 0;
+    expiry = 0; // as in a new selector: a reopened one buys at once, not when the old ones expire
+    expiryLogged = false;
   }
 
   /**
