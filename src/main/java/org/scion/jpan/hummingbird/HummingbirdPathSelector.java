@@ -64,7 +64,8 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
   // When the first reservation of path expires, in Unix seconds.
   private volatile long expiry;
   private boolean expiryLogged; // only buy() and renew(), which never run at the same time
-  private volatile boolean sentSinceBought;
+  private volatile boolean sentSinceBought; // set by the first packet written with path
+  private volatile boolean opened; // open() is done, so the timer may buy
   // The purchase the timer is trying to make, only used under the lock of renew() and close().
   private long roundStart; // the start of every attempt, so that all ask for one window; 0: none
   private int attempts; // failed attempts of this purchase
@@ -139,6 +140,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       throw e;
     }
     sentSinceBought = false;
+    opened = true;
     // Nothing to do until the reservations run low.
     setAlarm(expiry - renewBefore - System.currentTimeMillis() / 1000);
   }
@@ -158,11 +160,22 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     }
   }
 
-  /** The superclass selected its path, which may be another one: {@link #renew} looks at it now. */
+  /**
+   * The superclass selected its path, which may be another one, or the first one after an open()
+   * without a path: {@link #renew} looks at it now.
+   */
   @Override
   protected void onPathUpdate() {
-    if (flyovers != null) { // not during open(), which makes the first purchase itself
+    if (opened) { // not during open(), which makes the first purchase itself
       setAlarm(0);
+    }
+  }
+
+  /** The channel wrote the first packet with the current Hummingbird path. */
+  private void onFirstPacket() {
+    if (!sentSinceBought) {
+      sentSinceBought = true;
+      setAlarm(0); // renew() may be waiting for it to buy again
     }
   }
 
@@ -170,10 +183,13 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
    * Runs on the selector's timer when there may be something to do, and then sets the alarm for its
    * next run itself. If the selector's SCION path changed, it either keeps the flyovers (same
    * route, new bytes) or buys new ones (new route). Once the reservations expire in less than
-   * renewBefore seconds, it buys new ones. It only buys if the application sent since the last
-   * purchase, which {@link #getPath()} notes: an idle selector lets its reservations expire and
-   * buys again with the next packet. A failed purchase keeps the old path, and {@link #attempt}
-   * decides when to try again; after expiry the routers demote every packet.
+   * renewBefore seconds, it buys new ones. It only buys if a packet was written since the last
+   * purchase, which the Hummingbird path reports with its first one: an idle selector lets its
+   * reservations expire and buys again with the next packet. Looking at the path with {@link
+   * #getPath()} does not count. Without a Hummingbird path yet, as after an open() without a SCION
+   * path, it buys as soon as a SCION path appears, as open() would have. A failed purchase keeps
+   * the old path, and {@link #attempt} decides when to try again; after expiry the routers demote
+   * every packet.
    */
   private synchronized void renew() {
     if (!isOpen()) {
@@ -186,13 +202,15 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       if (current != null && scionPath != null && !current.equals(scionPath)) {
         if (sameRoute(current, scionPath)) {
           // Ak covers the interfaces and the window, not the SCION hop fields: no purchase.
-          path = new HummingbirdRequestPath(current, flyovers);
+          path = new HummingbirdRequestPath(current, flyovers, this::onFirstPacket);
           scionPath = current;
         } else {
           due = true; // another route needs flyovers of its own
         }
       }
-      if (due && sentSinceBought && now >= nextAttemptAt) {
+      // Without a path the application cannot send, so it buys as soon as there is a SCION path.
+      boolean wanted = sentSinceBought || (path == null && current != null);
+      if (due && wanted && now >= nextAttemptAt) {
         if (attempt(now)) {
           due = false;
         }
@@ -274,7 +292,7 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
       return;
     }
     Flyover[] bought = buyer.buyPath(current, bandwidth, start, duration, lookFirst);
-    path = new HummingbirdRequestPath(current, bought);
+    path = new HummingbirdRequestPath(current, bought, this::onFirstPacket);
     scionPath = current;
     flyovers = bought;
     expiry = expiryOf(bought);
@@ -319,20 +337,17 @@ public class HummingbirdPathSelector extends PathSelectorWithRefresh {
     nextAttemptAt = 0;
     expiry = 0; // as in a new selector: a reopened one buys at once, not when the old ones expire
     expiryLogged = false;
+    opened = false;
   }
 
   /**
    * @return the Hummingbird path with the bought flyovers, or the empty SCION path for a
    *     destination in the own AS; null before {@link #open}, after {@link #close} or if there is
-   *     no path to the destination
+   *     no path to the destination. Asking does not count as sending, only a packet written with
+   *     the path does.
    */
   @Override
   public Path getPath() {
-    if (!sentSinceBought) {
-      // The first packet since the last purchase: renew() may be waiting for it to buy again.
-      sentSinceBought = true;
-      setAlarm(0);
-    }
     return path;
   }
 

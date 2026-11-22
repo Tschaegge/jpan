@@ -102,7 +102,8 @@ class HummingbirdPathSelectorTest {
               ScionUtil.parseIA("1-ff00:0:112"), InetAddress.getLoopbackAddress(), 12345);
       selector.open(local);
       try {
-        assertEquals(0, selector.getPath().getPathType()); // EMPTY; this getPath() wakes renew()
+        assertEquals(0, selector.getPath().getPathType()); // EMPTY
+        selector.refresh(); // wakes renew()
         Thread.sleep(500);
         assertEquals(0, selector.getPath().getPathType());
         assertEquals(0, marketplace.getRequestCount());
@@ -114,7 +115,7 @@ class HummingbirdPathSelectorTest {
 
   /**
    * close() forgets the reservations it threw away. Reopened at a moment without a path, the
-   * selector buys as soon as a path appears and the application sends, not only when the discarded
+   * selector buys as soon as a path appears, as open() would have, not only when the discarded
    * reservations would have run low, 570 s later here.
    */
   @Test
@@ -138,7 +139,7 @@ class HummingbirdPathSelectorTest {
         noPaths.set(false);
         selector.refresh();
         Path path = null;
-        for (int i = 0; i < 40 && path == null; i++) { // each getPath() is a packet sent
+        for (int i = 0; i < 40 && path == null; i++) {
           path = selector.getPath();
           Thread.sleep(100);
         }
@@ -166,7 +167,7 @@ class HummingbirdPathSelectorTest {
       enqueuePurchase(); // spare, so that a late renewal does not wait for an answer
       selector.open(REMOTE);
       try {
-        Path first = selector.getPath();
+        Path first = send(selector);
         Thread.sleep(2000);
         assertEquals(requests, marketplace.getRequestCount(), "no purchase before it is due");
         for (int i = 0; i < 40 && selector.getPath() == first; i++) {
@@ -195,7 +196,7 @@ class HummingbirdPathSelectorTest {
       enqueuePurchase(); // spare
       selector.open(REMOTE);
       try {
-        Path first = selector.getPath();
+        Path first = send(selector);
         for (int i = 0; i < 40 && marketplace.getRequestCount() <= requests; i++) {
           Thread.sleep(100);
         }
@@ -227,7 +228,7 @@ class HummingbirdPathSelectorTest {
       }
       selector.open(REMOTE);
       try {
-        selector.getPath(); // the application sends, so the selector renews
+        send(selector); // the application sends, so the selector renews
         for (int i = 0; i < requests; i++) {
           marketplace.takeRequest(); // the purchase of open()
         }
@@ -262,10 +263,10 @@ class HummingbirdPathSelectorTest {
   }
 
   /**
-   * The selector renews only while the application sends, which it notices by getPath() calls; the
-   * test therefore watches the purchases through the marketplace, not through getPath(). 16 s
-   * reservations renewed 4 s ahead are due 2 to 3 s after a purchase. Three phases: one packet, so
-   * the first renewal happens; nothing sent for 3.5 s, so no renewal although one is due; one
+   * The selector renews only while the application sends, which it notices by the first packet
+   * written with each Hummingbird path; the test watches the purchases through the marketplace. 16
+   * s reservations renewed 4 s ahead are due 2 to 3 s after a purchase. Three phases: one packet,
+   * so the first renewal happens; nothing sent for 3.5 s, so no renewal although one is due; one
    * packet again, which sets the alarm, so the next purchase follows at once.
    */
   @Test
@@ -278,16 +279,45 @@ class HummingbirdPathSelectorTest {
       enqueuePurchase(); // spare, so that a wrong renewal does not wait for an answer
       selector.open(REMOTE);
       try {
-        selector.getPath(); // one packet
+        send(selector); // one packet
         awaitRequests(2 * requests);
         assertEquals(2 * requests, marketplace.getRequestCount(), "renewed while sending");
 
         Thread.sleep(3500); // nothing sent
         assertEquals(2 * requests, marketplace.getRequestCount(), "no purchase while idle");
 
-        selector.getPath(); // one packet after the pause
+        send(selector); // one packet after the pause
         awaitRequests(3 * requests);
         assertEquals(3 * requests, marketplace.getRequestCount(), "bought again once sending");
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
+   * Only packets count as sending, not looking at the path: an application that asks for the path
+   * every 100 ms, as a status display would, but writes nothing buys no renewal, although one is
+   * due. 16 s reservations renewed 4 s ahead are due 2 to 3 s after open().
+   */
+  @Test
+  void testGetPathIsNotSending() throws Exception {
+    try (MockNetwork2 nw = MockNetwork2.startPS(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      HummingbirdPathSelector selector = selector(16, 4);
+      int requests = enqueuePurchase();
+      enqueuePurchase();
+      enqueuePurchase(); // spare, so that a wrong renewal does not wait for an answer
+      selector.open(REMOTE);
+      try {
+        for (int i = 0; i < 40; i++) { // 4 s, past the due renewal
+          assertNotNull(selector.getPath());
+          Thread.sleep(100);
+        }
+        assertEquals(requests, marketplace.getRequestCount(), "bought although nothing was sent");
+
+        send(selector);
+        awaitRequests(2 * requests);
+        assertEquals(2 * requests, marketplace.getRequestCount(), "bought with the first packet");
       } finally {
         selector.close();
       }
@@ -374,6 +404,13 @@ class HummingbirdPathSelectorTest {
   }
 
   /** Waits up to 5 s until the marketplace has received at least n requests. */
+  /** One packet, as the channel writes it: the path's bytes into the header of the packet. */
+  private static Path send(PathSelector selector) {
+    Path path = selector.getPath();
+    path.writePath(ByteBuffer.allocate(1000), 200);
+    return path;
+  }
+
   private void awaitRequests(int n) throws InterruptedException {
     for (int i = 0; i < 50 && marketplace.getRequestCount() < n; i++) {
       Thread.sleep(100);

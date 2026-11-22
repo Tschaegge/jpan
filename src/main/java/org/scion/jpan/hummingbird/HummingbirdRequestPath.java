@@ -33,6 +33,10 @@ import org.scion.jpan.internal.header.HummingbirdPathConverter;
 public class HummingbirdRequestPath extends RequestPath {
 
   private final FlyoverAuthenticator authenticator;
+  // Runs once the first packet is written, so that a selector learns that the application sends;
+  // null for a path that the application built itself.
+  private final Runnable onFirstPacket;
+  private volatile boolean written;
 
   /**
    * Turns a SCION path into a Hummingbird path that sends with the given reservations.
@@ -46,6 +50,14 @@ public class HummingbirdRequestPath extends RequestPath {
    *     the flyovers do not match it
    */
   public HummingbirdRequestPath(Path scionPath, Flyover[] flyovers) {
+    this(scionPath, flyovers, null);
+  }
+
+  /**
+   * Like {@link #HummingbirdRequestPath(Path, Flyover[])}, and runs onFirstPacket when the first
+   * packet is written with this path, and with each copy of it.
+   */
+  HummingbirdRequestPath(Path scionPath, Flyover[] flyovers, Runnable onFirstPacket) {
     super(
         scionPath.getMetadata(),
         toHummingbird(scionPath, flyovers),
@@ -55,6 +67,7 @@ public class HummingbirdRequestPath extends RequestPath {
         scionPath.getRemoteAddress(),
         scionPath.getRemotePort());
     this.authenticator = new FlyoverAuthenticator(getRawPath(), flyovers);
+    this.onFirstPacket = onFirstPacket;
   }
 
   /** The same path as {@code original}, to dstIP and dstPort. */
@@ -69,6 +82,7 @@ public class HummingbirdRequestPath extends RequestPath {
         dstPort);
     // Shared, so the counter of the two paths keeps counting up together.
     this.authenticator = original.authenticator;
+    this.onFirstPacket = original.onFirstPacket;
   }
 
   private static byte[] toHummingbird(Path scionPath, Flyover[] flyovers) {
@@ -112,5 +126,11 @@ public class HummingbirdRequestPath extends RequestPath {
     int start = buffer.position();
     super.writePath(buffer, packetLength);
     authenticator.authenticate(buffer, start, getRemoteIsdAs(), packetLength);
+    if (!written) {
+      written = true;
+      if (onFirstPacket != null) {
+        onFirstPacket.run();
+      }
+    }
   }
 }
