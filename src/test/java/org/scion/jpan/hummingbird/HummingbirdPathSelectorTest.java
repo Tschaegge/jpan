@@ -20,7 +20,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import okhttp3.mockwebserver.MockResponse;
@@ -289,6 +291,46 @@ class HummingbirdPathSelectorTest {
         send(selector); // one packet after the pause
         awaitRequests(3 * requests);
         assertEquals(3 * requests, marketplace.getRequestCount(), "bought again once sending");
+      } finally {
+        selector.close();
+      }
+    }
+  }
+
+  /**
+   * When the superclass switches to another route, onPathUpdate() wakes renew(), which buys for the
+   * new route at once, not only when the old reservations run low, minutes later with 600 s
+   * reservations. The mock tiny4 has two links from 112 to 110, so two routes to 111; the policy
+   * swaps them on demand.
+   */
+  @Test
+  void testRouteChangeBuys() throws Exception {
+    // start(), not startPS(): only the mock control service knows both routes.
+    try (MockNetwork2 nw = MockNetwork2.start(MockNetwork2.Topology.TINY4, "ASff00_0_112")) {
+      assertTrue(Scion.defaultService().getPaths(REMOTE).size() >= 2, "two routes to 111");
+      AtomicBoolean swapped = new AtomicBoolean(false);
+      PathPolicy policy =
+          paths -> {
+            List<Path> sorted = new ArrayList<>(PathPolicy.MIN_HOPS.filter(paths));
+            if (swapped.get()) {
+              Collections.reverse(sorted);
+            }
+            return sorted;
+          };
+      HummingbirdPathSelector selector =
+          HummingbirdPathSelector.create(Scion.defaultService(), policy, buyer(), 1000, 600, 20);
+      int requests = enqueuePurchase();
+      selector.open(REMOTE);
+      try {
+        Path first = send(selector); // the application sends, so the new route is worth buying for
+        enqueuePurchase();
+        swapped.set(true);
+        selector.refresh();
+        for (int i = 0; i < 40 && selector.getPath() == first; i++) {
+          Thread.sleep(100);
+        }
+        assertEquals(2 * requests, marketplace.getRequestCount(), "bought for the new route");
+        assertFalse(HummingbirdPathSelector.sameRoute(first, selector.getPath()), "the new route");
       } finally {
         selector.close();
       }
