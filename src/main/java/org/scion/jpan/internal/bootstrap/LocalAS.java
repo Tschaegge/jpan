@@ -17,7 +17,6 @@ package org.scion.jpan.internal.bootstrap;
 import java.net.InetSocketAddress;
 import java.util.*;
 import org.scion.jpan.Constants;
-import org.scion.jpan.ScionRuntimeException;
 import org.scion.jpan.internal.util.IPHelper;
 
 /** Information about local AS. */
@@ -32,9 +31,10 @@ public class LocalAS {
   private final boolean isCoreAs;
   private final int localMtu;
   private final DispatcherPortRange portRange;
+  private final String snapAuthToken;
   private final TrcStore trcStore;
 
-  LocalAS(
+  protected LocalAS(
       List<Long> localIsdAs,
       boolean isCoreAs,
       int localMtu,
@@ -43,6 +43,7 @@ public class LocalAS {
       List<ServiceNode> discoveryServices,
       List<BorderRouter> borderRouters,
       List<SnapControlNode> snapControlNodes,
+      String snapAuthToken,
       TrcStore trcStore) {
     this.localIsdAs = Collections.unmodifiableList(localIsdAs);
     this.isCoreAs = isCoreAs;
@@ -53,6 +54,7 @@ public class LocalAS {
     this.borderRouters = borderRouters;
     this.snapControlNodes = snapControlNodes;
     this.interfaceIDs = initInterfaceIDs(borderRouters);
+    this.snapAuthToken = snapAuthToken;
     this.trcStore = trcStore;
   }
 
@@ -101,14 +103,11 @@ public class LocalAS {
    * Address of the first hop border router for a given interface ID.
    *
    * @param interfaceId border router interface ID
-   * @return The address of the border router
+   * @return The address of the border router or 'null' if the br ID is not found.
    */
   public InetSocketAddress getBorderRouterAddress(int interfaceId) {
     BorderRouter br = interfaceIDs.get(interfaceId);
-    if (br == null) {
-      throw new ScionRuntimeException("No router found with interface ID " + interfaceId);
-    }
-    return br.internalAddress;
+    return br == null ? null : br.internalAddress;
   }
 
   /**
@@ -122,6 +121,10 @@ public class LocalAS {
 
   public DispatcherPortRange getPortRange() {
     return portRange;
+  }
+
+  public String getSnapAuthToken() {
+    return snapAuthToken;
   }
 
   @Override

@@ -13,12 +13,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Check scion-sdk version flag in http API
 - Performance TODO: When connected: buffer complete SCION header i.o. building it
   every time. Add cached header to "Path" for send()?
-- Use Builder for LocalAS?
-- Create Builder for ScionService or add SNP props to Channel.Builder???
 - Fix flaky MacOS build
   [ERROR]   NatMappingTest.testKeepAliveBR_ResetTimerAfterReceive:550 expected: <1> but was: <2>
-
-- After release: update exercise for PathSelector
 - Implement a "Marshaller":
   Inserts/strips SCION headers from a packet. That can be useful for implementations
   that cannot use ScionDatagramSocket:
@@ -33,7 +29,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   (Path references SSA?) Or SPA?
   (Hide SSA.getPath)? 
   --> Document this (Conceptually: SSA has no Path. However, to enable drop-in use
-  of DatagramChannel, we associate a Payj wit some SSAs)
+  of DatagramChannel, we associate a Path with some SSAs)
   we internally )
 
 - Consider Performance/Security debugging mode:
@@ -133,7 +129,7 @@ TODO
 - Authenticate SCMP / EPIC !?!?!?
 - STUN: 
   - Always listen for STUN packets (e.g. eternally blocking receive()) in order to support on-demand STUN
-  - Validate IP of incoming packets agains known NAT mapped addresses? 
+  - Validate IP of incoming packets against known NAT mapped addresses? 
 - Improve PathPolicy API:
   - Chainable PathPolicies (can be done manually or by providing a combinator class)
   - PathSelector/Supplier (e.g. for traceroute policies)
@@ -178,21 +174,91 @@ TODO
 
 ## 0.9.0 - WIP
 
+- TODO Endhost API version marker: Endhost-API-Server-Version
+- TODO Distinguish border routers by ISD (non-unique interface IDs)
+- TODO What is up with path-services not being listed in SNAP discovery service
+
+Two JPAN bugs found along the way:
+- receive() with SNAP: ScionDatagramChannel.receive() throws No router found with interface ID … for any UDP packet that arrives over an inter-AS path. AbstractScionChannel.getFirstHopAddress() looks for a local border router, and SNAP mode has none. This is still the case on your master branch.
+- Source port 0: ScionHeaderParser.validateUDP drops packets with UDP source port 0. scionproto sends the SVC request to port 0 and the CS swaps the ports in its reply, so I send the request to port 30252 instead.
+
+JPAN also can't send to SVC addresses (the address type is hard-coded to 0), so the demo patches that header field just before sending.
+
+TODO
+- Think how to implement multi-page segment requests.
+  - By default, only use first page?
+  - With special policies, ask for additional pages? How do we specify that? -> Just an option in the Selector or maybe in the ScionService?
+
+### Fixed
+
+- Post 0.8.2 release cleanup.
+  [#312](https://github.com/scionproto-contrib/jpan/pull/312)
+- Avoid border router check when using SNAP mode, in SNAP we don't have a list of border routers.
+  [#313](https://github.com/scionproto-contrib/jpan/pull/313)
+- Drop packet if it has an invalid border router ID.
+  [#314](https://github.com/scionproto-contrib/jpan/pull/314)
+
+
+## [0.8.2] - 2026-11-17
+
+### Fixed
+
+- SNAP: ScionService would return non-unique ISD-AS numbers.
+  [#307](https://github.com/scionproto-contrib/jpan/pull/307)
+- Allow topology.json `"attributes": null`
+  [#308](https://github.com/scionproto-contrib/jpan/pull/308)
+- Fixed SNAP error messages in case of missing auth service.
+  [#310](https://github.com/scionproto-contrib/jpan/pull/310)
+- Fixed release instructions.
+  [#311](https://github.com/scionproto-contrib/jpan/pull/311)
+
+### Changed
+
+- Don't log error on invalid SCION addresses in /etc/hosts
+  [#303](https://github.com/scionproto-contrib/jpan/pull/303)
+- SNAP: Improved example, better warning in case of explicit settings, and
+  prefer explicit setting over derived values.
+  [#305](https://github.com/scionproto-contrib/jpan/pull/305)
+- SNAP: Improved API auth token handling.
+  (drive-by: Test ScionService extensibility)
+  [#306](https://github.com/scionproto-contrib/jpan/pull/306)
+
 ### Added
 
-Nothing yet
+- Additional constructor for `RequestPath`
+  [#302](https://github.com/scionproto-contrib/jpan/pull/302)
+- CLAB support for PingPongDemo and traceroute demo
+  [#304](https://github.com/scionproto-contrib/jpan/pull/304)
+- Builder and extensibility for `ScionService`
+  [#309](https://github.com/scionproto-contrib/jpan/pull/309)
 
-## 0.8.1
+## [0.8.1] - 2026-11-02
 
 ### Fixed
 
 - Fixed NPE in `ScionDatagramPacket.getSocketAddress()`
   [#294](https://github.com/scionproto-contrib/jpan/pull/294)
+- Fixed code format plugin failures
+  [#297](https://github.com/scionproto-contrib/jpan/pull/297)
 
-### Fixed
+### Changed
 
 - Post release updates
   [#293](https://github.com/scionproto-contrib/jpan/pull/293)
+
+### Added
+
+- Added convenience constructor for `ScionSocketAddress`
+  [#295](https://github.com/scionproto-contrib/jpan/pull/295)
+- Made `PathSelectorWithRefresh` properly extendable.
+  [#296](https://github.com/scionproto-contrib/jpan/pull/296)
+- Improved API documentation for `PathSelector`.
+  [#298](https://github.com/scionproto-contrib/jpan/pull/298)
+- Made `RequestPath` and `ResponsePath` extendable with protected constructor.
+  [#299](https://github.com/scionproto-contrib/jpan/pull/299)
+- Added `ScionUtil.toStringIAs()` utility function.
+  [#300](https://github.com/scionproto-contrib/jpan/pull/300)
+
 
 ## [0.8.0] - 2026-10-16
 
@@ -786,7 +852,9 @@ For example: `Path.getFirstHopAddress()`, `DatagramChannel.setPathPolicy()`
 ### Removed
 - Nothing
 
-[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/scionproto-contrib/jpan/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/scionproto-contrib/jpan/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/scionproto-contrib/jpan/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/scionproto-contrib/jpan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/scionproto-contrib/jpan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/scionproto-contrib/jpan/compare/v0.6.0...v0.6.1

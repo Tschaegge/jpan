@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.time.Instant;
 import java.util.List;
+import org.scion.jpan.internal.bootstrap.LocalAS;
 import org.scion.jpan.internal.header.HeaderConstants;
 import org.scion.jpan.internal.header.ScionHeaderParser;
 import org.scion.jpan.internal.paths.ControlServiceGrpc;
@@ -190,6 +191,11 @@ public class PackageVisibilityHelper {
     return RequestPath.create(path, dstHost, dstPort, IPHelper.toInetSocketAddress(firstHopString));
   }
 
+  public static RequestPath createRequestPath(
+      PathMetadata metadata, InetAddress dstIP, int dstPort, LocalAS localAS, boolean isSnap) {
+    return RequestPath.create(metadata, dstIP, dstPort, localAS, isSnap);
+  }
+
   public static RequestPath createRequestPath(PathMetadata path, InetSocketAddress dst) {
     InetSocketAddress firstHop = IPHelper.toInetSocketAddress("127.0.0.1:22311");
     return RequestPath.create(path, dst.getAddress(), dst.getPort(), firstHop);
@@ -202,12 +208,8 @@ public class PackageVisibilityHelper {
     return RequestPath.create(m, base.getRemoteAddress(), base.getRemotePort(), firstHop);
   }
 
-  public static ScionSocketAddress toSSA(long isdAs, InetSocketAddress dstAddr) {
-    return ScionSocketAddress.from(isdAs, dstAddr.getAddress(), dstAddr.getPort());
-  }
-
   public static ScionSocketAddress toSSA(String isdAs, InetSocketAddress dstAddr) {
-    return toSSA(ScionUtil.parseIA(isdAs), dstAddr);
+    return ScionSocketAddress.from(ScionUtil.parseIA(isdAs), dstAddr);
   }
 
   public static String getFirstHop(ScionService ss, PathMetadata path) {
